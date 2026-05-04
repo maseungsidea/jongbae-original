@@ -1,0 +1,42 @@
+
+> frontend@0.1.0 dev
+> next dev
+
+   â–² Next.js 15.1.7
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.18.26:3000
+
+ âœ“ Starting...
+ âœ“ Ready in 8.1s
+ â—‹ Compiling /dashboard/kr ...
+ âœ“ Compiled /dashboard/kr in 16.2s (645 modules)
+ âœ“ Compiled in 1541ms (305 modules)
+ GET /dashboard/kr 200 in 17854ms
+(node:34160) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ â—‹ Compiling /dashboard/kr/vcp ...
+ âœ“ Compiled /dashboard/kr/vcp in 1095ms (629 modules)
+ GET /dashboard/kr/vcp 200 in 1316ms
+ â—‹ Compiling /dashboard/kr/closing-bet ...
+ âœ“ Compiled /dashboard/kr/closing-bet in 605ms (636 modules)
+ GET /dashboard/kr/closing-bet 200 in 736ms
+ GET /dashboard/kr/vcp 200 in 38ms
+ GET /dashboard/kr 200 in 41ms
+ GET /dashboard/kr/vcp 200 in 73ms
+ GET /dashboard/kr/closing-bet 200 in 45ms
+ GET /dashboard/kr 200 in 36ms
+ GET /dashboard/kr/vcp 200 in 31ms
+ GET /dashboard/kr 200 in 32ms
+ GET /dashboard/kr/vcp 200 in 30ms
+ GET /dashboard/kr 200 in 30ms
+ GET /dashboard/kr/closing-bet 200 in 29ms
+ GET /dashboard/kr/vcp 200 in 28ms
+ GET /dashboard/kr/closing-bet 200 in 30ms
+ GET /dashboard/kr/vcp 200 in 31ms
+ GET /dashboard/kr 200 in 27ms
+ âœ“ Compiled in 712ms (309 modules)
+ GET /dashboard/kr 200 in 76ms
+ âœ“ Compiled in 478ms (309 modules)
+ GET /dashboard/kr 200 in 48ms
+
+C:\Users\SeungkwonLee\Á¾°¡¹èÆÃ¾Û\frontend>

@@ -1,0 +1,36 @@
+# 환경변수 (절대 커밋 금지)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 데이터 파일 (용량이 크므로 제외)
+data/*.csv
+data/*.json
+
+# 챗봇 메모리/히스토리 파일
+data/memory_*.json
+data/history_*.json
+
+# 로그
+*.log
+logs/
+
+# Node.js
+node_modules/
+frontend/.next/
+frontend/out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
