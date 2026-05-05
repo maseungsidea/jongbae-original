@@ -150,6 +150,80 @@ n=208 trades / WR 64.9% / EV +0.494% / RR 0.65
 
 - `data/daily_prices.csv` (1.29M rows)
 - `data/backtests/baseline.json`
-- `data/backtests/sw_*.json` (11 + 8 변형)
+- `data/backtests/sw_*.json` (11 + 8 + 7 + 6 = 32 변형)
 - `scripts/backtest_jongga.py` (재사용 가능 엔진)
-- `scripts/run_jongga_sweep.sh`, `run_jongga_sweep2.sh`
+- `scripts/run_jongga_sweep[1-4].sh`
+- `scripts/analyze_backtest.py` (drawdown / Sharpe / streak 추가 메트릭)
+
+---
+
+## 8. ⚡ Phase 2 — drawdown 분석 후 자동매매 권장 변경 (2026-05-05 14:35)
+
+`scripts/analyze_backtest.py` 로 32개 sweep 의 cum_return / max_drawdown /
+Sharpe / max_losing_streak 를 추가 산출한 결과, **EV 가 좋아도 MDD 가
+-65~-97% 인 전략은 자동매매 불가**라는 결론이 나옴.
+
+### Top 5 by EV — drawdown 비교
+
+| Rank | label | n | WR | EV | RR | **MDD** | maxLstr | 자동매매 적합 |
+|------|-------|---|-----|----|----|---------|---------|--------------|
+| 1 | sw_h20_off | 104 | 35.6% | +6.45% | 3.94 | **-81.14%** | 12 | ❌ |
+| 2 | sw_h15_atr10_off | 116 | 31.9% | +4.41% | 4.49 | **-73.69%** | 17 | ❌ |
+| 3 | sw_h15_off | 109 | 39.5% | +4.09% | 2.77 | **-83.93%** | 15 | ❌ |
+| 4 | sw_h10_atr10_off | 128 | 35.9% | +3.29% | 3.37 | **-69.81%** | 12 | ❌ |
+| 5 | sw_c4_h10_off | 510 | 42.8% | +2.29% | 2.07 | **-97.01%** | 16 | ❌ |
+
+→ target=off 류는 **모두 -65% 이상의 drawdown** 발생. 직전 권장이었던
+`cutoff=4 + target=off + hold=10d` 도 MDD -97% 로 자동매매 불가능.
+
+### Top 5 by drawdown ascending (낮은 MDD 우선) — Sweep #4 반영
+
+| label | n | WR | EV | RR | MDD | maxLstr | tpm |
+|-------|---|-----|----|----|-----|---------|-----|
+| **sw_nopen_gap1** | 101 | 49.5% | +2.37% | 1.76 | **-48.02%** | 7 | 5.3 |
+| sw_t8 | 190 | 57.4% | +1.04% | 1.01 | -51.59% | 6 | 9.0 |
+| **sw_pe_t8** | 152 | 55.9% | +1.66% | 1.26 | **-53.32%** | 6 | 7.2 |
+| sw_pe_t5 | 152 | 55.9% | +1.40% | 1.23 | -55.61% | 10 | 7.2 |
+| sw_nopen_gap2 | 117 | 47.9% | +2.25% | 1.83 | -57.89% | 7 | 6.2 |
+| sw_pe_t10_h10 | 126 | 49.2% | +1.44% | 1.39 | -65.49% (잠정) | - | 6.0 |
+| sw_c4_pe_t8_h10 | 510 | 50.2% | +1.73% | 1.53 | -84.57% | 10 | 24.3 |
+
+### 🎯 변경된 자동매매 권장 (Phase 2 final — Sweep #1~#4 통합)
+
+**1순위 — `sw_pe_t8` (partial_exit + atr15 + fixed8 target, hold=5d)** ⭐ 운영 채택
+- 백테 WR 55.9%, EV +1.656%, RR 1.26, **MDD -53.32%**, Sharpe 2.83, maxLstr **6**
+- 월 7.2건 — 월 5~10건 정도 자동매매에 무리 없음
+- 50% 는 +8% 에서 익절, 50% 는 ATR(1.5×) 트레일링/5일 시간 청산
+- 운영 코드 통합 완료:
+  - `engine/trailing_stop.py` (신규)
+  - `engine/config.py` (ATR/partial_exit 파라미터)
+  - `engine/position_sizer.py` (ATR 기반 stop)
+  - `engine/generator.py` (charts → ATR 자동 계산)
+  - `signal_tracker.py` (partial_exit + trailing 추적)
+
+**2순위 — `sw_nopen_gap1` (next_open + gap≤1% + target=off, hold=5d)**
+- 백테 WR 49.5%, EV +2.367%, RR 1.76, MDD **-48.02%** (전 sweep 최저!)
+- 월 5.3건 (낮음)
+- 단점: next_open 진입 + 갭 필터 — 현재 운영 코드는 close 진입만 지원,
+  추가 구현 비용 있음. 다만 안정성 면에선 가장 우월
+- 후속 작업으로 검토 가치 있음 (운영 코드의 진입 시점 옵션 추가)
+
+**3순위 — `sw_c4_pe_t8_h10` (cutoff=4 + partial_exit + fixed8 + hold=10d)**
+- WR 50.2%, EV +1.730%, RR 1.53, **거래 510건 (월 24건)**, MDD -84.57%
+- 거래량은 압도적이지만 -84% MDD 는 자동매매로 위험
+- 자본 분할 운용(50% 만 위 전략)에는 검토 여지 있음
+
+**비추천 — target=off + hold≥10d 전략 전반**
+- EV 는 매력적이지만 -65% 이상 drawdown → 실계좌로 1년 운영 시
+  최소 한 번은 자산 절반 이하로 떨어지는 시점 발생
+- partial_exit 없이 long-tail 윈너에 의존 → 운영 심리/현금흐름 모두 부담
+
+### 운영 코드 변경 요약
+
+| 파일 | 변경 |
+|------|------|
+| `engine/trailing_stop.py` | (새 모듈) ATR 14 + 트레일링 stop / TrailingState |
+| `engine/config.py` | atr_period/atr_multiplier/max_hold_days 추가, take_profit_pct=20 (정보용) |
+| `engine/position_sizer.py` | `calculate(..., atr_value=)` 옵션 추가 |
+| `engine/generator.py` | charts→ATR 자동 계산 후 sizer 전달 |
+| `signal_tracker.py` | track_signals() 가 ATR 트레일링으로 청산 판단 + CSV 신규 컬럼 |

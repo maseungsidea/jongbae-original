@@ -62,6 +62,12 @@ def parse_args():
                    default="atr15", help="손절 룰. fixed3=고정 -3%")
     p.add_argument("--target", choices=["off", "fixed5", "fixed8", "fixed10"],
                    default="fixed5", help="익절. fixed5=+5%")
+    p.add_argument("--partial-exit", action="store_true",
+                   help="부분 청산: target 도달 시 50% 청산, 나머지는 trailing/time")
+    p.add_argument("--max-gap-pct", type=float, default=None,
+                   help="next_open 진입 시 갭 +X% 이상이면 skip (예: 2.0)")
+    p.add_argument("--regime", choices=["any", "bull"], default="any",
+                   help="bull = KOSPI EMA20>EMA60 인 거래일만 진입")
     p.add_argument("--start", default=None, help="백테스트 시작일 (YYYY-MM-DD)")
     p.add_argument("--end", default=None, help="백테스트 종료일")
     p.add_argument("--label", default="run", help="결과 파일 라벨")
@@ -170,6 +176,11 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
             if len(future) < 1:
                 continue
             entry = float(future.iloc[0]["open"])
+            # 갭 필터: 익일 시초가 갭이 너무 크면 skip
+            if args.max_gap_pct is not None:
+                gap_pct = (entry / close - 1.0) * 100
+                if gap_pct > args.max_gap_pct:
+                    continue
             exit_window = future.iloc[1:args.hold_days + 1]
         else:  # close
             entry = close
@@ -183,21 +194,52 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
         stop = trailing_stop_value(entry, atr, args.trailing)
         target = target_value(entry, args.target)
 
+        # 청산 시뮬레이션
         exit_px = float(exit_window.iloc[-1]["close"])
         reason = "time"
         exit_date = str(exit_window.iloc[-1]["date"])
+        partial_done = False
+        partial_return = 0.0   # 부분 청산 시 50% 누적 수익 (gross 기준)
+
         for _, row in exit_window.iterrows():
             low = float(row["low"]); high = float(row["high"])
+            row_date = str(row["date"])
+
+            # target hit
+            if target is not None and high >= target and not partial_done:
+                if args.partial_exit:
+                    # 50% 부분 청산: 나머지 50%는 hold 지속, target 무력화
+                    partial_done = True
+                    partial_return = 0.5 * (target / entry - 1.0)
+                    # 다음 row로 (이 row에서 stop 동시 hit 가능성은 무시)
+                    continue
+                else:
+                    exit_px = target; reason = "target"; exit_date = row_date
+                    break
+
+            # stop hit
             if stop is not None and low <= stop:
-                exit_px = stop
-                reason = "stop"
-                exit_date = str(row["date"])
+                if partial_done:
+                    remainder = 0.5 * (stop / entry - 1.0)
+                    full_gross = partial_return + remainder
+                    exit_px = entry * (1 + full_gross)   # weighted exit (가상가)
+                    reason = "partial_stop"
+                else:
+                    exit_px = stop
+                    reason = "stop"
+                exit_date = row_date
                 break
-            if target is not None and high >= target:
-                exit_px = target
-                reason = "target"
-                exit_date = str(row["date"])
-                break
+        else:
+            # break 없이 종료 → time exit
+            last_close = float(exit_window.iloc[-1]["close"])
+            if partial_done:
+                remainder = 0.5 * (last_close / entry - 1.0)
+                full_gross = partial_return + remainder
+                exit_px = entry * (1 + full_gross)
+                reason = "partial_time"
+            else:
+                exit_px = last_close
+                reason = "time"
 
         gross = exit_px / entry - 1.0
         net = gross - FEE_RT

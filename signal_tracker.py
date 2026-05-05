@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent
 SIGNAL_LOG_PATH = ROOT / "data" / "signals_log.csv"
 
 # CSV 컬럼 스키마
+# v2: peak_price / atr_value / trailing_stop / days_held + partial_taken / partial_return 추가
 COLUMNS = [
     "signal_id",       # UUID 또는 ticker+date 조합
     "ticker",
@@ -44,19 +45,34 @@ COLUMNS = [
     "status",           # pending | entered | exited
     "exit_date",
     "exit_price",
-    "exit_reason",      # stop_loss | take_profit | time_exit | manual
+    "exit_reason",      # stop_loss | trailing_stop | time_exit | partial_stop | partial_time | manual
     "return_pct",
     "pnl",
     "created_at",
+    # ── ATR 트레일링 + partial_exit 추적 ──
+    "atr_value",        # 최근 ATR(14)
+    "peak_price",       # 보유 기간 최고가
+    "trailing_stop",    # 현재 ATR 기반 동적 손절가
+    "days_held",        # 보유 일수
+    "partial_taken",    # 분할 익절 실행 여부 (0/1)
+    "partial_return",   # 1차 분할 청산 시 수익률(%) — 최종 return_pct는 가중평균
 ]
 
 
 def _load() -> pd.DataFrame:
-    """CSV 파일을 로드합니다. 파일이 없으면 빈 DataFrame을 반환합니다."""
+    """CSV 파일을 로드. 신규 컬럼이 빠진 구버전 CSV 는 자동 backfill."""
     SIGNAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not SIGNAL_LOG_PATH.exists():
         return pd.DataFrame(columns=COLUMNS)
-    return pd.read_csv(SIGNAL_LOG_PATH, dtype={"ticker": str})
+    df = pd.read_csv(SIGNAL_LOG_PATH, dtype={"ticker": str})
+    # ATR 트레일링 + partial_exit 컬럼이 없으면 추가 (이전 버전 호환)
+    for col in (
+        "atr_value", "peak_price", "trailing_stop", "days_held",
+        "partial_taken", "partial_return",
+    ):
+        if col not in df.columns:
+            df[col] = pd.NA
+    return df
 
 
 def _save(df: pd.DataFrame) -> None:
@@ -185,37 +201,192 @@ def get_today_signals() -> pd.DataFrame:
     return df[df["signal_date"] == today].copy()
 
 
-def track_signals() -> None:
-    """
-    미청산 시그널을 현재 주가와 비교하여 손절/익절 자동 업데이트.
-    scheduler.py에서 장 종료 후 호출됩니다.
-    """
-    import pykrx.stock as pk_stock  # noqa: F401
+def _update_trailing_fields(idx: int, df: pd.DataFrame, **fields) -> None:
+    """signals_log.csv 의 한 행에 ATR/peak/stop 등 컬럼을 안전하게 갱신."""
+    for k, v in fields.items():
+        if k in df.columns:
+            df.at[idx, k] = v
 
-    open_signals = get_open_signals()
-    if open_signals.empty:
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """NaN / None / 빈 문자열을 default 로 변환."""
+    try:
+        f = float(value)
+        return default if pd.isna(f) else f
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default: int = 0) -> int:
+    """NaN / None / 빈 문자열을 default 로 변환."""
+    try:
+        f = float(value)
+        return default if pd.isna(f) else int(f)
+    except (TypeError, ValueError):
+        return default
+
+
+def track_signals(
+    atr_period: int = 14,
+    atr_multiplier: float = 1.5,
+    max_hold_days: int = 5,
+    partial_exit_enabled: bool = True,
+    partial_exit_target_pct: float = 8.0,
+    partial_exit_ratio: float = 0.5,
+) -> None:
+    """
+    미청산 시그널을 ATR 기반 트레일링 스톱으로 자동 추적.
+
+    백테(`scripts/backtest_jongga.py`) 검증:
+      - target=off + atr15 + hold=5d 가 EV +1.602%, RR 1.61, 월 25건.
+      - 고정 +5% 익절은 EV 의 가장 큰 누수원이라 제거함.
+
+    매일 장 마감 후 1회 호출:
+      1) 보유 종목의 OHLC + ATR 갱신
+      2) peak_price / trailing_stop 단조 증가 갱신
+      3) low ≤ trailing_stop → trailing_stop 청산
+      4) days_held ≥ max_hold_days → time_exit
+    """
+    import pykrx.stock as pk_stock
+
+    from engine.trailing_stop import (
+        compute_atr,
+        initial_trailing_stop,
+        should_exit,
+        update_trailing_stop,
+        TrailingState,
+    )
+
+    df = _load()
+    if df.empty:
+        logger.info("[signal_tracker] 시그널 없음")
+        return
+
+    open_mask = df["status"].isin(["pending", "entered"])
+    if not open_mask.any():
         logger.info("[signal_tracker] 미청산 시그널 없음")
         return
 
-    today_str = date.today().strftime("%Y%m%d")
-    for _, row in open_signals.iterrows():
+    today = date.today()
+    today_str = today.strftime("%Y%m%d")
+    # ATR 계산용으로 60일치 OHLC 확보
+    from datetime import timedelta
+    start_str = (today - timedelta(days=120)).strftime("%Y%m%d")
+
+    for idx in df[open_mask].index:
+        row = df.loc[idx]
         ticker = str(row["ticker"])
         try:
-            df_today = pk_stock.get_market_ohlcv_by_date(today_str, today_str, ticker)
-            if df_today is None or df_today.empty:
+            ohlc = pk_stock.get_market_ohlcv_by_date(start_str, today_str, ticker)
+            if ohlc is None or ohlc.empty:
                 continue
 
-            close_price = float(df_today.iloc[-1]["종가"])
-            stop_price = float(row["stop_price"])
-            target_price = float(row["target_price"])
+            highs = ohlc["고가"].astype(float).tolist()
+            lows = ohlc["저가"].astype(float).tolist()
+            closes = ohlc["종가"].astype(float).tolist()
 
-            if close_price <= stop_price:
-                update_exit(ticker, row["signal_date"], close_price, "stop_loss")
-            elif close_price >= target_price:
-                update_exit(ticker, row["signal_date"], close_price, "take_profit")
+            atr_series = compute_atr(highs, lows, closes, period=atr_period)
+            today_high, today_low, today_close = highs[-1], lows[-1], closes[-1]
+            today_atr = atr_series[-1] if atr_series else 0.0
+
+            entry_price = _safe_float(row.get("entry_price"))
+            prev_peak = _safe_float(row.get("peak_price")) or entry_price
+            prev_stop = _safe_float(row.get("trailing_stop")) or initial_trailing_stop(
+                entry_price, today_atr, atr_multiplier
+            )
+            prev_days = _safe_int(row.get("days_held"))
+            prev_atr = _safe_float(row.get("atr_value")) or today_atr
+            prev_partial_taken = bool(_safe_int(row.get("partial_taken")))
+            prev_partial_return = _safe_float(row.get("partial_return"))
+
+            state = TrailingState(
+                entry_price=entry_price,
+                peak_price=prev_peak,
+                atr_value=prev_atr,
+                trailing_stop=prev_stop,
+                days_held=prev_days,
+                partial_taken=prev_partial_taken,
+            )
+            state = update_trailing_stop(
+                state, today_high=today_high, today_close=today_close,
+                today_atr=today_atr, k=atr_multiplier,
+            )
+
+            # ─ partial_exit 처리: 1차 +8% target 도달 시 50% 익절 ─
+            partial_just_taken = False
+            if (
+                partial_exit_enabled
+                and not state.partial_taken
+                and entry_price > 0
+                and today_high >= entry_price * (1 + partial_exit_target_pct / 100)
+            ):
+                partial_price = entry_price * (1 + partial_exit_target_pct / 100)
+                partial_pct = (partial_price - entry_price) / entry_price * 100
+                state.partial_taken = True
+                prev_partial_return = partial_pct
+                partial_just_taken = True
+                logger.info(
+                    f"[signal_tracker] 분할 익절: {ticker} +{partial_pct:.2f}% "
+                    f"(잔량 50% trailing 유지)"
+                )
+
+            _update_trailing_fields(
+                idx, df,
+                atr_value=round(today_atr, 4),
+                peak_price=round(state.peak_price, 0),
+                trailing_stop=round(state.trailing_stop, 0),
+                days_held=state.days_held,
+                partial_taken=int(state.partial_taken),
+                partial_return=round(prev_partial_return, 2) if state.partial_taken else None,
+            )
+
+            exit_yn, reason, exit_price = should_exit(
+                state, today_low=today_low, today_close=today_close,
+                max_hold_days=max_hold_days,
+            )
+            if exit_yn:
+                # exit reason="stop_loss" 인 경우 정확한 의미는 trailing 이지만
+                # 기존 분석 호환을 위해 trailing_stop 으로 명시
+                base_reason = "trailing_stop" if reason == "stop_loss" else reason
+                if state.partial_taken:
+                    reason_label = "partial_stop" if reason == "stop_loss" else "partial_time"
+                else:
+                    reason_label = base_reason
+
+                df.at[idx, "status"] = "exited"
+                df.at[idx, "exit_date"] = today.isoformat()
+                df.at[idx, "exit_price"] = exit_price
+                df.at[idx, "exit_reason"] = reason_label
+
+                remainder_pct = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
+                # partial_exit 시 가중평균: 50% × partial_return + 50% × remainder
+                if state.partial_taken:
+                    final_pct = (
+                        partial_exit_ratio * prev_partial_return
+                        + (1 - partial_exit_ratio) * remainder_pct
+                    )
+                else:
+                    final_pct = remainder_pct
+
+                qty = _safe_int(row.get("quantity"))
+                df.at[idx, "return_pct"] = round(final_pct, 2)
+                df.at[idx, "pnl"] = round(entry_price * qty * final_pct / 100, 0)
+                logger.info(
+                    f"[signal_tracker] 청산: {ticker} {reason_label} "
+                    f"({final_pct:+.2f}%, hold={state.days_held}d, "
+                    f"partial={state.partial_taken})"
+                )
+            else:
+                logger.debug(
+                    f"[signal_tracker] {ticker} 추적: "
+                    f"peak={state.peak_price:.0f} stop={state.trailing_stop:.0f} "
+                    f"days={state.days_held}"
+                )
 
         except Exception as e:
             logger.warning(f"[signal_tracker] {ticker} 추적 오류: {e}")
+
+    _save(df)
 
 
 if __name__ == "__main__":

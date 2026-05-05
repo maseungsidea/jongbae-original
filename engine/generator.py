@@ -179,8 +179,23 @@ class SignalGenerator:
                 if grade == Grade.C:
                     return None
 
-                # 5. 포지션 계산
-                pos = self._sizer.calculate(stock.close, grade)
+                # 5. 포지션 계산 (ATR 가용 시 ATR 기반 stop)
+                atr_today: float | None = None
+                try:
+                    if charts and len(charts) >= 15:
+                        from engine.trailing_stop import compute_atr
+                        period = getattr(self.config, "atr_period", 14)
+                        atr_series = compute_atr(
+                            [c.high for c in charts],
+                            [c.low for c in charts],
+                            [c.close for c in charts],
+                            period=period,
+                        )
+                        if atr_series:
+                            atr_today = atr_series[-1]
+                except Exception as _e:
+                    logger.debug(f"ATR 계산 실패 ({stock.code}): {_e}")
+                pos = self._sizer.calculate(stock.close, grade, atr_value=atr_today)
 
                 # 6. Signal 생성
                 now = datetime.now()

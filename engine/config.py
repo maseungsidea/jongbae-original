@@ -124,9 +124,22 @@ class SignalConfig:
     })
 
     # ── 매매 설정 ──────────────────────────────
-    stop_loss_pct: float = 3.0              # 손절 -3%
-    take_profit_pct: float = 5.0            # 익절 +5%
+    # 손절/익절 (1차 백테에서 +5% 고정 익절은 EV 의 가장 큰 누수원으로 확인됨.
+    # signal_tracker 가 ATR 트레일링을 별도 관리하므로 take_profit_pct 는
+    # 정보용 ceiling 으로만 남기고 실제 청산은 trailing_stop / time_exit 으로.)
+    stop_loss_pct: float = 3.0              # 진입 직후 1일차 백업 손절 -3%
+    take_profit_pct: float = 20.0           # 정보용 (실 청산은 trailing 이 결정)
     r_ratio: float = 0.005                  # 1R = 계좌의 0.5%
+
+    # ── ATR 트레일링 (signal_tracker.track_signals) ───────────────
+    # 백테 검증 (sw_pe_t8): partial_exit + atr15 + fixed8 target + hold=5d
+    # → WR 55.9%, EV +1.656%, RR 1.26, MDD -53.32%, Sharpe 2.83 (현 최적)
+    atr_period: int = 14                     # ATR 계산 기간
+    atr_multiplier: float = 1.5              # peak - k×ATR 의 k 값
+    max_hold_days: int = 5                   # time_exit 발동 일수
+    partial_exit_enabled: bool = True        # 50% 분할 익절 활성화
+    partial_exit_target_pct: float = 8.0     # 분할 익절 발동 +8%
+    partial_exit_ratio: float = 0.5          # 익절 비중 50%
 
     # ── LLM 설정 ──────────────────────────────
     llm_news_limit: int = 5                 # LLM에 전달할 최대 뉴스 개수

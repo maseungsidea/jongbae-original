@@ -54,13 +54,20 @@ class PositionSizer:
         self.capital = capital
         self.config = config
 
-    def calculate(self, price: float, grade: Grade) -> PositionResult:
+    def calculate(
+        self,
+        price: float,
+        grade: Grade,
+        atr_value: float | None = None,
+    ) -> PositionResult:
         """
         현재가와 등급을 받아 포지션 사이징 결과를 반환합니다.
 
         Args:
             price: 현재가 (종가 기준)
             grade: 시그널 등급 (S/A/B)
+            atr_value: 진입 직전 ATR(14). 지정 시 stop = entry - k×ATR
+                       (k = config.atr_multiplier). 미지정 시 fixed-pct 손절.
 
         Returns:
             PositionResult 인스턴스
@@ -75,9 +82,13 @@ class PositionSizer:
         grade_cfg = self.config.get_grade_config(grade)
         r_multiplier = grade_cfg.r_multiplier
 
-        # 가격 계산
+        # 가격 계산: ATR 가 들어오면 ATR 기반 stop 사용 (백테 검증 결과 채택)
         entry_price = price
-        stop_price = entry_price * (1 - self.config.stop_loss_pct / 100)
+        if atr_value is not None and atr_value > 0:
+            k = getattr(self.config, "atr_multiplier", 1.5)
+            stop_price = max(0.0, entry_price - k * atr_value)
+        else:
+            stop_price = entry_price * (1 - self.config.stop_loss_pct / 100)
         target_price = entry_price * (1 + self.config.take_profit_pct / 100)
 
         # 리스크 계산
