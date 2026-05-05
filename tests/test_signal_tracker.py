@@ -213,3 +213,64 @@ class TestUpdateExit:
     def test_update_nonexistent_ticker_returns_false(self):
         ok = signal_tracker.update_exit("999999", "2026-05-05", 1000, "manual")
         assert ok is False
+
+
+def make_two_day_ohlc(d_close: float, next_open: float, signal_date: str = "2026-05-05"):
+    """signal_date 1일치 + next_open 1일치 = 2-row OHLC.
+
+    next_open 진입 + 갭 필터 단위 테스트용.
+    """
+    return pd.DataFrame({
+        "시가": [d_close, next_open],
+        "고가": [d_close + 200, next_open + 300],
+        "저가": [d_close - 200, next_open - 300],
+        "종가": [d_close, next_open],
+        "거래량": [1_000_000, 1_500_000],
+    }, index=pd.date_range(signal_date, periods=2))
+
+
+class TestNextOpenEntry:
+    def test_pending_waits_when_no_next_day_data(self):
+        signal_tracker.save_signal(make_signal_dict(entry=70000))
+        # ohlc 에 signal_date 1일치만 → next_open 데이터 없음
+        ohlc = make_two_day_ohlc(70000, 70300).iloc[:1]
+        with patch("pykrx.stock.get_market_ohlcv_by_date", return_value=ohlc):
+            signal_tracker.track_signals(entry_timing="next_open", max_gap_pct=1.0)
+        df = signal_tracker._load()
+        assert df.iloc[0]["status"] == "pending"  # 변화 없음
+
+    def test_within_gap_enters_at_next_open(self):
+        signal_tracker.save_signal(make_signal_dict(entry=70000))
+        # 갭 +0.43% (< 1%) → 진입
+        ohlc = make_two_day_ohlc(70000, 70300)
+        with patch("pykrx.stock.get_market_ohlcv_by_date", return_value=ohlc):
+            signal_tracker.track_signals(entry_timing="next_open", max_gap_pct=1.0)
+        df = signal_tracker._load()
+        row = df.iloc[0]
+        assert row["status"] == "entered"
+        assert int(row["entry_price"]) == 70300
+
+    def test_above_gap_threshold_invalidates(self):
+        signal_tracker.save_signal(make_signal_dict(entry=70000))
+        # 갭 +1.43% (> 1%) → invalidated
+        ohlc = make_two_day_ohlc(70000, 71000)
+        with patch("pykrx.stock.get_market_ohlcv_by_date", return_value=ohlc):
+            signal_tracker.track_signals(entry_timing="next_open", max_gap_pct=1.0)
+        df = signal_tracker._load()
+        row = df.iloc[0]
+        assert row["status"] == "invalidated"
+        assert row["exit_reason"] == "gap_skip"
+        assert int(row["exit_price"]) == 71000
+        assert float(row["return_pct"]) == 0.0
+
+    def test_close_mode_unchanged(self):
+        # entry_timing=close 면 pending row 가 즉시 trailing 평가 (기존 동작)
+        signal_tracker.save_signal(make_signal_dict(entry=70000))
+        prices = list(np.linspace(70000, 71500, 30))
+        with patch("pykrx.stock.get_market_ohlcv_by_date", return_value=make_ohlc(prices)):
+            signal_tracker.track_signals(entry_timing="close")
+        df = signal_tracker._load()
+        row = df.iloc[0]
+        assert row["status"] == "pending"  # close 모드는 status 변경 없이 trailing
+        assert int(row["entry_price"]) == 70000  # entry_price 유지
+        assert not pd.isna(row["peak_price"])

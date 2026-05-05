@@ -141,6 +141,16 @@ class SignalConfig:
     partial_exit_target_pct: float = 8.0     # 분할 익절 발동 +8%
     partial_exit_ratio: float = 0.5          # 익절 비중 50%
 
+    # ── 진입 타이밍 (sw_nopen_gap1 옵션) ────────────────────────
+    # 백테 검증: WR 49.5%, EV +2.367%, MDD -48.02%, Sharpe 3.23
+    # → MDD 측면에서 sw_pe_t8(-53%) 보다 양호. 다만 진입 슬리피지·
+    #   거래 미체결 위험 있어 운영에선 paper 검증 후 점진 적용 권장.
+    # entry_timing: "close"  → 신호 발생일 종가 즉시 진입 (기본)
+    #                "next_open" → 다음 거래일 시가 진입 (갭 필터 가능)
+    # max_gap_pct : next_open 모드에서 시가 갭이 +X% 초과면 신호 무효화
+    entry_timing: str = "close"              # close / next_open
+    max_gap_pct: float = 1.0                 # 갭 필터 임계 (next_open 전용)
+
     # ── LLM 설정 ──────────────────────────────
     llm_news_limit: int = 5                 # LLM에 전달할 최대 뉴스 개수
     llm_timeout_sec: int = 10              # LLM API 타임아웃

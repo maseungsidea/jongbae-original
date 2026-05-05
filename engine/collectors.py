@@ -231,22 +231,23 @@ class KRXCollector:
             end = date.today()
             start = end - timedelta(days=self.config.supply_lookback_days + 3)  # 주말 여유분
 
-            df = await asyncio.to_thread(
-                stock.get_market_net_purchases_of_equities_by_ticker,
-                start.strftime("%Y%m%d"),
-                end.strftime("%Y%m%d"),
-                "KOSPI",      # KOSPI/KOSDAQ 별도 호출 필요
-            )
-            await asyncio.sleep(self.REQUEST_DELAY_SEC)
+            # KOSPI / KOSDAQ 양쪽 모두 조회 (종목코드는 시장간 unique)
+            for market in ("KOSPI", "KOSDAQ"):
+                df = await asyncio.to_thread(
+                    stock.get_market_net_purchases_of_equities_by_ticker,
+                    start.strftime("%Y%m%d"),
+                    end.strftime("%Y%m%d"),
+                    market,
+                )
+                await asyncio.sleep(self.REQUEST_DELAY_SEC)
+                if df is not None and not df.empty and code in df.index:
+                    row = df.loc[code]
+                    return SupplyData(
+                        foreign_buy_5d=int(row.get("외국인", 0)),
+                        inst_buy_5d=int(row.get("기관합계", 0)),
+                    )
 
-            if df is None or df.empty or code not in df.index:
-                return SupplyData()  # 기본값(0) 반환
-
-            row = df.loc[code]
-            return SupplyData(
-                foreign_buy_5d=int(row.get("외국인", 0)),
-                inst_buy_5d=int(row.get("기관합계", 0)),
-            )
+            return SupplyData()  # 어느 시장에서도 발견 못하면 기본값
 
         except Exception as e:
             logger.error(f"[KRXCollector] get_supply_data({code}) 오류: {e}")

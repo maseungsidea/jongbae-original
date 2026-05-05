@@ -42,10 +42,10 @@ COLUMNS = [
     "position_size",
     "quantity",
     "r_multiplier",
-    "status",           # pending | entered | exited
+    "status",           # pending | entered | exited | invalidated
     "exit_date",
     "exit_price",
-    "exit_reason",      # stop_loss | trailing_stop | time_exit | partial_stop | partial_time | manual
+    "exit_reason",      # stop_loss | trailing_stop | time_exit | partial_stop | partial_time | manual | gap_skip
     "return_pct",
     "pnl",
     "created_at",
@@ -242,19 +242,27 @@ def track_signals(
     partial_exit_enabled: bool = True,
     partial_exit_target_pct: float = 8.0,
     partial_exit_ratio: float = 0.5,
+    entry_timing: str = "close",
+    max_gap_pct: float = 1.0,
 ) -> None:
     """
     미청산 시그널을 ATR 기반 트레일링 스톱으로 자동 추적.
 
     백테(`scripts/backtest_jongga.py`) 검증:
-      - target=off + atr15 + hold=5d 가 EV +1.602%, RR 1.61, 월 25건.
-      - 고정 +5% 익절은 EV 의 가장 큰 누수원이라 제거함.
+      - sw_pe_t8 (close 진입): WR 55.9%, EV +1.656%, MDD -53.32%, Sharpe 2.83
+      - sw_nopen_gap1 (next_open + 갭 1%): WR 49.5%, EV +2.367%, MDD -48.02%
+
+    Args:
+        entry_timing : "close" → 신호일 종가 진입 (기본)
+                       "next_open" → 다음 거래일 시가 진입 (갭 필터 적용)
+        max_gap_pct  : next_open 모드에서 시가 갭이 +X% 초과면 status=invalidated
 
     매일 장 마감 후 1회 호출:
-      1) 보유 종목의 OHLC + ATR 갱신
-      2) peak_price / trailing_stop 단조 증가 갱신
-      3) low ≤ trailing_stop → trailing_stop 청산
-      4) days_held ≥ max_hold_days → time_exit
+      1) pending 시그널 → next_open 진입/갭 필터 처리
+      2) 보유 종목의 OHLC + ATR 갱신
+      3) peak_price / trailing_stop 단조 증가 갱신
+      4) low ≤ trailing_stop → trailing_stop 청산
+      5) days_held ≥ max_hold_days → time_exit
     """
     import pykrx.stock as pk_stock
 
@@ -297,6 +305,58 @@ def track_signals(
             atr_series = compute_atr(highs, lows, closes, period=atr_period)
             today_high, today_low, today_close = highs[-1], lows[-1], closes[-1]
             today_atr = atr_series[-1] if atr_series else 0.0
+
+            # ── next_open 진입 + 갭 필터 처리 ──
+            # status=="pending" 이고 entry_timing=="next_open" 이면
+            # signal_date 다음 거래일 시가 갭 검증 후 진입/무효화 결정.
+            if entry_timing == "next_open" and str(row.get("status")) == "pending":
+                sig_date_str = str(row.get("signal_date", ""))
+                try:
+                    sig_date_dt = pd.to_datetime(sig_date_str).date()
+                except Exception:
+                    sig_date_dt = None
+
+                sig_idx = None
+                if sig_date_dt is not None:
+                    for i, dt in enumerate(ohlc.index):
+                        if dt.date() == sig_date_dt:
+                            sig_idx = i
+                            break
+
+                # 다음 거래일 OHLC 가 아직 없으면 대기 (다음 호출에서 처리)
+                if sig_idx is None or sig_idx + 1 >= len(ohlc):
+                    continue
+
+                sig_close = float(ohlc.iloc[sig_idx]["종가"])
+                next_open_px = float(ohlc.iloc[sig_idx + 1]["시가"])
+                gap_pct = (next_open_px / sig_close - 1.0) * 100 if sig_close > 0 else 0.0
+
+                if gap_pct > max_gap_pct:
+                    df.at[idx, "status"] = "invalidated"
+                    df.at[idx, "exit_date"] = ohlc.index[sig_idx + 1].date().isoformat()
+                    df.at[idx, "exit_reason"] = "gap_skip"
+                    df.at[idx, "exit_price"] = next_open_px
+                    df.at[idx, "return_pct"] = 0.0
+                    df.at[idx, "pnl"] = 0.0
+                    logger.info(
+                        f"[signal_tracker] 갭 무효화: {ticker} "
+                        f"gap={gap_pct:+.2f}% > {max_gap_pct}% (skip)"
+                    )
+                    continue
+
+                # 진입: entry_price 를 시가로 갱신, status=entered
+                df.at[idx, "entry_price"] = next_open_px
+                df.at[idx, "status"] = "entered"
+                logger.info(
+                    f"[signal_tracker] next_open 진입: {ticker} "
+                    f"close={sig_close:.0f} → open={next_open_px:.0f} "
+                    f"(gap={gap_pct:+.2f}%)"
+                )
+                # 진입 당일은 trailing 평가 skip (다음 호출부터 본격 trailing)
+                if sig_idx + 1 == len(ohlc) - 1:
+                    continue
+                # ohlc 마지막이 진입일보다 더 이후면 그 시점부터 trailing 평가
+                row = df.loc[idx]
 
             entry_price = _safe_float(row.get("entry_price"))
             prev_peak = _safe_float(row.get("peak_price")) or entry_price

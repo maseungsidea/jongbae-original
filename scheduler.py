@@ -88,10 +88,36 @@ def run_full_update() -> dict:
 
 
 def run_signal_tracking() -> None:
-    """장 마감 후 미청산 시그널 손절/익절 자동 기록"""
+    """장 마감 후 미청산 시그널 손절/익절 자동 기록.
+
+    SignalConfig 의 ATR/partial/entry_timing 파라미터를 그대로 사용.
+    환경변수로 override 가능:
+      JONGGA_ENTRY_TIMING (close|next_open)
+      JONGGA_MAX_GAP_PCT (float)
+    """
     try:
+        import os
         import signal_tracker
-        signal_tracker.track_signals()
+        from engine.config import SignalConfig
+
+        cfg = SignalConfig()
+        entry_timing = os.environ.get("JONGGA_ENTRY_TIMING", cfg.entry_timing)
+        max_gap_pct = float(os.environ.get("JONGGA_MAX_GAP_PCT", cfg.max_gap_pct))
+
+        signal_tracker.track_signals(
+            atr_period=cfg.atr_period,
+            atr_multiplier=cfg.atr_multiplier,
+            max_hold_days=cfg.max_hold_days,
+            partial_exit_enabled=cfg.partial_exit_enabled,
+            partial_exit_target_pct=cfg.partial_exit_target_pct,
+            partial_exit_ratio=cfg.partial_exit_ratio,
+            entry_timing=entry_timing,
+            max_gap_pct=max_gap_pct,
+        )
+        logger.info(
+            f"[Scheduler] 시그널 추적 완료 (entry={entry_timing}, "
+            f"max_gap={max_gap_pct}%)"
+        )
     except Exception as e:
         logger.error(f"[Scheduler] 시그널 추적 오류: {e}")
 
