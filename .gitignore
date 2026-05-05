@@ -12,6 +12,7 @@ env/
 # 데이터 파일 (용량이 크므로 제외)
 data/*.csv
 data/*.json
+data/backtests/
 
 # 챗봇 메모리/히스토리 파일
 data/memory_*.json

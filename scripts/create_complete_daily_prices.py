@@ -74,7 +74,12 @@ def create_daily_prices(days: int = 730) -> None:
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     stock_df = pd.read_csv(STOCK_LIST_PATH, dtype={"ticker": str})
+    if "marcap" in stock_df.columns:
+        stock_df = stock_df.sort_values("marcap", ascending=False)
     tickers = stock_df["ticker"].tolist()
+    if TOP_N is not None:
+        tickers = tickers[:TOP_N]
+        logger.info(f"--top-n {TOP_N} 적용: 시총 상위 {len(tickers)}종 만 수집")
 
     end = date.today()
     start = end - timedelta(days=days)
@@ -116,8 +121,13 @@ def create_daily_prices(days: int = 730) -> None:
     logger.info(f"✅ 저장 완료: {OUTPUT_PATH} (총 {len(result):,}행)")
 
 
+TOP_N: int | None = None
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="전 종목 일봉 데이터 생성")
     parser.add_argument("--days", type=int, default=730, help="수집 기간 (기본: 730일)")
+    parser.add_argument("--top-n", type=int, default=None,
+                        help="시총 상위 N종만 수집 (기본: 전 종목)")
     args = parser.parse_args()
+    TOP_N = args.top_n
     create_daily_prices(days=args.days)
