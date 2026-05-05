@@ -72,6 +72,11 @@ def _load() -> pd.DataFrame:
     ):
         if col not in df.columns:
             df[col] = pd.NA
+    # 문자열 컬럼이 NaN-only 일 때 float64 로 추정되는 문제 방지
+    # (이후 string 대입 시 FutureWarning → 미래 에러)
+    for col in ("exit_date", "exit_reason"):
+        if col in df.columns:
+            df[col] = df[col].astype(object)
     return df
 
 
@@ -125,7 +130,11 @@ def save_signal(signal_dict: dict) -> bool:
             "created_at": signal_dict.get("created_at", ""),
         }
 
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        new_row = pd.DataFrame([row])
+        if df.empty:
+            df = new_row
+        else:
+            df = pd.concat([df, new_row], ignore_index=True)
         _save(df)
         logger.info(f"[signal_tracker] 저장: {ticker} {signal_date} ({row['grade']}등급)")
         return True
