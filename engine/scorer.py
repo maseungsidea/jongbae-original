@@ -263,9 +263,15 @@ class Scorer:
         - 외인 또는 기관 중 하나 순매수 → +1점
         - 외인 + 기관 모두 순매수 → +2점 (추가 +1)
 
+        SignalConfig.supply_enabled=False 면 항상 0 (KRX 수급 API 차단 시
+        라이브-백테 정합성 위해 강제 무력화).
+
         Returns:
             (점수, 수급 긍정 여부, 외인+기관 동시 순매수 여부)
         """
+        if not getattr(self.config, "supply_enabled", True):
+            return 0, False, False
+
         if supply is None:
             return 0, False, False
 

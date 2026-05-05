@@ -114,6 +114,9 @@ class SignalConfig:
 
     # 수급 기준
     supply_lookback_days: int = 5           # 외인/기관 순매수 집계 기간
+    # KRX pykrx 수급 API 가 차단된 동안(2026-05 확인) supply 점수를 강제 0 으로
+    # 만들어 라이브와 백테(supply 미연동) 정합성을 보장. 네이버 백필 도입 시 True 로.
+    supply_enabled: bool = False            # 수급 점수(0~2) 활성 여부
 
     # ── 등급별 기준 ────────────────────────────
     grade_configs: Dict[str, GradeConfig] = field(default_factory=lambda: {
