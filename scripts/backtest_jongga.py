@@ -37,15 +37,51 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from engine.config import Grade, SignalConfig
-from engine.models import ChartData, StockData
+from engine.models import ChartData, StockData, SupplyData
 from engine.scorer import Scorer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 PRICES_PATH = ROOT / "data" / "daily_prices.csv"
+SUPPLY_PATH = ROOT / "data" / "naver_supply.csv"
 OUT_DIR = ROOT / "data" / "backtests"
 FEE_RT = 0.0021  # 한국 round-trip 수수료 + 세금
+
+
+def load_supply_lookup() -> dict | None:
+    """naver_supply.csv 를 (ticker, date) → (inst_net, foreign_net) dict 로 로드."""
+    if not SUPPLY_PATH.exists():
+        return None
+    df = pd.read_csv(SUPPLY_PATH, dtype={"ticker": str}, parse_dates=["date"])
+    df["ticker"] = df["ticker"].str.zfill(6)
+    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+    out: dict = {}
+    for r in df.itertuples(index=False):
+        out[(r.ticker, r.date)] = (int(r.inst_net), int(r.foreign_net))
+    return out
+
+
+def lookup_supply(
+    sup: dict | None, ticker: str, date_str: str, lookback: int = 5
+) -> SupplyData | None:
+    """신호일 D 의 D-(lookback-1) ~ D 누적 외인/기관 net buy 반환."""
+    if sup is None:
+        return None
+    target = pd.Timestamp(date_str)
+    foreign_total = 0
+    inst_total = 0
+    found = False
+    for i in range(lookback):
+        d = (target - pd.Timedelta(days=i)).strftime("%Y-%m-%d")
+        if (ticker, d) in sup:
+            inst, foreign = sup[(ticker, d)]
+            inst_total += inst
+            foreign_total += foreign
+            found = True
+    if not found:
+        return None
+    return SupplyData(foreign_buy_5d=foreign_total, inst_buy_5d=inst_total)
 
 
 def parse_args():
@@ -73,6 +109,8 @@ def parse_args():
     p.add_argument("--label", default="run", help="결과 파일 라벨")
     p.add_argument("--max-rows-debug", type=int, default=0,
                    help="디버그: ticker 수 제한 (0=전체)")
+    p.add_argument("--supply", choices=["on", "off"], default="off",
+                   help="data/naver_supply.csv 의 외인/기관 5일 누적을 점수에 반영")
     return p.parse_args()
 
 
@@ -118,7 +156,7 @@ def target_value(entry: float, mode: str) -> float | None:
 
 
 def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
-                 config: SignalConfig) -> list[dict]:
+                 config: SignalConfig, supply_lookup: dict | None = None) -> list[dict]:
     """단일 ticker 시뮬레이션. sequential overlap 적용."""
     df = df_ticker.sort_values("date").reset_index(drop=True)
     if len(df) < 70:
@@ -161,7 +199,8 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
             high_52w=None, low_52w=None,
         )
 
-        score, _ = scorer.calculate(stock, charts, [], None, None)
+        sup = lookup_supply(supply_lookup, ticker, date_str) if supply_lookup else None
+        score, _ = scorer.calculate(stock, charts, [], sup, None)
 
         if args.allow_grade:
             grade = scorer.determine_grade(stock, score)
@@ -295,7 +334,16 @@ def main():
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     config = SignalConfig()
+    # supply 옵션이 켜져 있으면 백테 한정으로 supply_enabled=True
+    config.supply_enabled = (args.supply == "on")
     scorer = Scorer(config)
+
+    supply_lookup = load_supply_lookup() if args.supply == "on" else None
+    if args.supply == "on":
+        if supply_lookup is None:
+            logger.warning(f"[backtest] supply=on 이지만 {SUPPLY_PATH} 없음 → 0 처리")
+        else:
+            logger.info(f"[backtest] supply 로드: {len(supply_lookup)} (ticker,date) 행")
 
     logger.info(f"[backtest:{args.label}] 데이터 로드 중...")
     prices = pd.read_csv(PRICES_PATH, dtype={"ticker": str})
@@ -318,7 +366,7 @@ def main():
 
     all_trades = []
     for idx, ticker in enumerate(tickers):
-        trades = simulate_one(by_ticker[ticker], ticker, args, scorer, config)
+        trades = simulate_one(by_ticker[ticker], ticker, args, scorer, config, supply_lookup)
         all_trades.extend(trades)
         if (idx + 1) % 200 == 0:
             logger.info(f"  [{args.label}] {idx + 1}/{len(tickers)} "
