@@ -210,6 +210,23 @@ def get_today_signals() -> pd.DataFrame:
     return df[df["signal_date"] == today].copy()
 
 
+def persist_screener_result(result) -> int:
+    """ScreenerResult 의 모든 Signal 을 signals_log.csv 에 저장.
+
+    중복(같은 ticker+signal_date)은 save_signal 이 알아서 skip.
+    Returns: 새로 저장된 행 수.
+    """
+    saved = 0
+    for sig in getattr(result, "signals", []):
+        try:
+            d = sig.to_dict()
+        except AttributeError:
+            d = dict(sig)
+        if save_signal(d):
+            saved += 1
+    return saved
+
+
 def _update_trailing_fields(idx: int, df: pd.DataFrame, **fields) -> None:
     """signals_log.csv 의 한 행에 ATR/peak/stop 등 컬럼을 안전하게 갱신."""
     for k, v in fields.items():

@@ -21,8 +21,6 @@ import logging
 import time
 from datetime import date
 
-import schedule
-
 logger = logging.getLogger(__name__)
 
 
@@ -33,12 +31,22 @@ def run_vcp_scan() -> dict:
     """
     logger.info("[Scheduler] VCP 스캔 시작")
     try:
+        import signal_tracker
         from engine.generator import run_screener, save_result_to_json
         result = asyncio.run(run_screener(capital=50_000_000))
         path = save_result_to_json(result)
-        msg = f"VCP 스캔 완료: {len(result.signals)}개 시그널 → {path}"
+        # 페이퍼 트래킹: 신규 시그널을 signals_log.csv 에 누적
+        # (track_signals 가 다음 거래일부터 자동으로 ATR/partial 청산 계산)
+        saved = signal_tracker.persist_screener_result(result)
+        msg = (
+            f"VCP 스캔 완료: {len(result.signals)}개 시그널 → {path} "
+            f"(트래커 신규 {saved}개)"
+        )
         logger.info(f"[Scheduler] {msg}")
-        return {"success": True, "message": msg, "signal_count": len(result.signals)}
+        return {
+            "success": True, "message": msg,
+            "signal_count": len(result.signals), "tracked": saved,
+        }
     except Exception as e:
         logger.error(f"[Scheduler] VCP 스캔 오류: {e}")
         return {"success": False, "error": str(e)}
@@ -144,7 +152,7 @@ def main() -> None:
         run_signal_tracking()
         return
 
-    # 주기적 스케줄 등록
+    import schedule  # 주기 모드에서만 필요 (--now 시 미설치 환경도 동작)
     schedule.every().day.at("08:50").do(run_full_update)
     schedule.every().day.at("15:35").do(run_vcp_scan)
     schedule.every().day.at("15:40").do(run_signal_tracking)
