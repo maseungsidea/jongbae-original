@@ -130,6 +130,21 @@ def run_signal_tracking() -> None:
         logger.error(f"[Scheduler] 시그널 추적 오류: {e}")
 
 
+def run_daily_summary() -> None:
+    """오늘 추천종목 슬림 요약본을 텔레그램으로 발송.
+
+    `engine.generator.save_today_recommendations` 가 만든
+    data/today_recommendations.json 을 읽어 단일 메시지로 전송.
+    JONGGA_NOTIFY=0 또는 자격증명 부재 시 graceful no-op (notifier 가 가드).
+    """
+    try:
+        from utils import notifier
+        sent = notifier.notify_today_recommendations()
+        logger.info(f"[Scheduler] 일일 요약 발송 결과: {sent}")
+    except Exception as e:
+        logger.error(f"[Scheduler] 일일 요약 오류: {e}")
+
+
 def main() -> None:
     """
     스케줄러 메인 진입점.
@@ -150,17 +165,20 @@ def main() -> None:
         run_full_update()
         run_vcp_scan()
         run_signal_tracking()
+        run_daily_summary()
         return
 
     import schedule  # 주기 모드에서만 필요 (--now 시 미설치 환경도 동작)
     schedule.every().day.at("08:50").do(run_full_update)
     schedule.every().day.at("15:35").do(run_vcp_scan)
     schedule.every().day.at("15:40").do(run_signal_tracking)
+    schedule.every().day.at("15:42").do(run_daily_summary)
 
     logger.info("[Scheduler] 스케줄 시작 (Ctrl+C 로 종료)")
     logger.info("  08:50 → 데이터 업데이트")
     logger.info("  15:35 → VCP 스캔")
     logger.info("  15:40 → 시그널 추적")
+    logger.info("  15:42 → 일일 추천종목 텔레그램 발송")
 
     while True:
         schedule.run_pending()

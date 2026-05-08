@@ -332,4 +332,42 @@ def save_result_to_json(result: ScreenerResult) -> Path:
         json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
 
     logger.info(f"[Generator] 결과 저장: {out_path}")
+
+    # 추천종목 요약본 (텔레그램 일일 알림용 슬림 포맷)
+    save_today_recommendations(result)
+    return out_path
+
+
+def save_today_recommendations(result: ScreenerResult) -> Path:
+    """오늘 추천종목 슬림 요약본 저장 (텔레그램 알림 소비용).
+
+    필드: ticker, name, grade, score, price, market, trading_value
+    grade 순(S>A>B), 동등시 score 내림차순 정렬.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = DATA_DIR / "today_recommendations.json"
+
+    grade_rank = {"S": 0, "A": 1, "B": 2, "C": 3}
+    items = []
+    for s in result.signals:
+        grade_val = s.grade.value if hasattr(s.grade, "value") else str(s.grade)
+        items.append({
+            "ticker": s.stock_code,
+            "name": s.stock_name,
+            "grade": grade_val,
+            "score": s.score.total,
+            "price": int(round(s.current_price)),
+            "market": s.market,
+            "trading_value": s.trading_value,
+        })
+    items.sort(key=lambda x: (grade_rank.get(x["grade"], 9), -x["score"]))
+
+    payload = {
+        "date": result.date.isoformat() if hasattr(result, "date") else None,
+        "count": len(items),
+        "items": items,
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    logger.info(f"[Generator] 추천종목 요약 저장: {out_path} ({len(items)}개)")
     return out_path

@@ -120,6 +120,56 @@ def notify_order(
     return send_message(f"{head}\n{body}")
 
 
+def notify_today_recommendations(
+    path: str = "data/today_recommendations.json",
+    *, max_items: int = 20,
+) -> bool:
+    """`data/today_recommendations.json` 을 읽어 일일 추천종목 메시지 발송.
+
+    파일이 없거나 비어있으면 "오늘 추천종목 없음" 메시지를 보낸다.
+    """
+    e = _escape_html
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except FileNotFoundError:
+        logger.info(f"[notifier] {path} 없음 → skip")
+        return False
+    except Exception as ex:
+        logger.warning(f"[notifier] {path} 읽기 실패: {ex}")
+        return False
+
+    items = payload.get("items", []) or []
+    date_str = payload.get("date") or ""
+    header = f"📈 <b>오늘 추천종목</b>"
+    if date_str:
+        header += f" ({e(date_str)})"
+
+    if not items:
+        return send_message(f"{header}\n조건에 맞는 종목 없음")
+
+    lines = [header]
+    for i, it in enumerate(items[:max_items], start=1):
+        grade = e(str(it.get("grade", "")))
+        name = e(str(it.get("name", "")))
+        ticker = e(str(it.get("ticker", "")))
+        score = it.get("score", 0)
+        price = it.get("price", 0)
+        tv = it.get("trading_value", 0) or 0
+        line = (
+            f"{i}. <b>{name}</b> ({ticker}) [Grade {grade}] "
+            f"{score}점 · {price:,}원"
+        )
+        if tv:
+            line += f" · 거래대금 {tv/1e8:,.0f}억"
+        lines.append(line)
+
+    if len(items) > max_items:
+        lines.append(f"… 외 {len(items) - max_items}개")
+
+    return send_message("\n".join(lines))
+
+
 def notify_error(context: str, err: BaseException) -> bool:
     """운영 중 예외 발생 알림."""
     e = _escape_html

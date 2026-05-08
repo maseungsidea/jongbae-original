@@ -139,6 +139,42 @@ class TestNotifyOrder:
             assert "%EC%8B%A4%ED%8C%A8" in text
 
 
+class TestNotifyTodayRecommendations:
+    def test_with_items(self, env_enabled, tmp_path):
+        p = tmp_path / "today.json"
+        p.write_text(json.dumps({
+            "date": "2026-05-08",
+            "count": 2,
+            "items": [
+                {"ticker": "005930", "name": "삼성전자", "grade": "A",
+                 "score": 9, "price": 70000, "trading_value": 600_000_000_000},
+                {"ticker": "000660", "name": "SK하이닉스", "grade": "B",
+                 "score": 7, "price": 200000, "trading_value": 0},
+            ],
+        }, ensure_ascii=False), encoding="utf-8")
+        with patch("utils.notifier.urllib.request.urlopen", return_value=_ok_response()) as m:
+            assert notifier.notify_today_recommendations(str(p)) is True
+            text = m.call_args[0][0].data.decode()
+            # 삼성전자 / SK하이닉스 url-encoded 일부 포함
+            assert "%EC%82%BC%EC%84%B1" in text          # "삼성"
+            assert "005930" in text and "000660" in text
+            assert "70%2C000" in text or "70,000" in text
+
+    def test_empty_items(self, env_enabled, tmp_path):
+        p = tmp_path / "today.json"
+        p.write_text(json.dumps({"date": "2026-05-08", "count": 0, "items": []}),
+                     encoding="utf-8")
+        with patch("utils.notifier.urllib.request.urlopen", return_value=_ok_response()) as m:
+            assert notifier.notify_today_recommendations(str(p)) is True
+            text = m.call_args[0][0].data.decode()
+            assert "%EC%97%86%EC%9D%8C" in text  # "없음"
+
+    def test_missing_file(self, env_enabled, tmp_path):
+        with patch("utils.notifier.urllib.request.urlopen") as m:
+            assert notifier.notify_today_recommendations(str(tmp_path / "nope.json")) is False
+            m.assert_not_called()
+
+
 class TestNotifyError:
     def test_with_exception(self, env_enabled):
         with patch("utils.notifier.urllib.request.urlopen", return_value=_ok_response()) as m:
