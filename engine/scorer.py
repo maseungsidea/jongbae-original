@@ -101,12 +101,35 @@ class Scorer:
         - A: 8점+, 거래대금 5천억+
         - B: 6점+, 거래대금 1천억+
         - C: 기준 미달 (제외 대상)
+
+        Grade B+ 결정 시 Telegram 알림을 발송한다 (utils.notifier 가
+        JONGGA_NOTIFY=0 또는 자격증명 부재 시 자동 no-op).
         """
         for grade in [Grade.S, Grade.A, Grade.B]:
             gc = self.config.get_grade_config(grade)
             if score.total >= gc.min_score and stock.trading_value >= gc.min_trading_value:
+                self._notify_grade(stock, score, grade)
                 return grade
         return Grade.C
+
+    @staticmethod
+    def _notify_grade(stock: StockData, score: ScoreDetail, grade: Grade) -> None:
+        """채택 시그널을 Telegram 으로 알림. 실패해도 채점 흐름은 영향 받지 않음."""
+        try:
+            from utils import notifier
+            notifier.notify_signal(
+                ticker=stock.code,
+                name=stock.name,
+                grade=grade.value,
+                score=score.total,
+                entry_price=stock.close,
+                stop_price=0,        # PositionSizer 가 결정 — generator 단계에서 알림이 더 정확
+                target_price=0,
+                market=stock.market,
+                trading_value=stock.trading_value,
+            )
+        except Exception as e:
+            logger.debug(f"[scorer] 알림 실패(무시): {e}")
 
     # ─────────────────────────────────────────
     # 내부 채점 메서드

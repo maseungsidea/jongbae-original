@@ -67,7 +67,21 @@ async def place_order(
         logger.warning(
             f"[KIS] 주문 실패 {req.side.value} {req.ticker}: {res.msg_cd} {res.msg}"
         )
+    _notify_order_result(req, res)
     return res
+
+
+def _notify_order_result(req: OrderRequest, res: OrderResponse) -> None:
+    """체결 결과 Telegram 알림. notifier 가 자체 가드(JONGGA_NOTIFY/자격증명) 보유."""
+    try:
+        from utils import notifier
+        notifier.notify_order(
+            side=req.side.value, ticker=req.ticker,
+            quantity=req.quantity, price=req.price,
+            ok=res.ok, msg=res.msg, odno=res.odno,
+        )
+    except Exception as e:
+        logger.debug(f"[KIS] 알림 실패(무시): {e}")
 
 
 async def place_buy(

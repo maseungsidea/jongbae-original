@@ -25,10 +25,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean
+
+# 백테는 수십만 건 채점 → Telegram 알림 강제 비활성 (utils.notifier 가 이 env 를 본다)
+os.environ.setdefault("JONGGA_NOTIFY", "0")
 
 import numpy as np
 import pandas as pd
