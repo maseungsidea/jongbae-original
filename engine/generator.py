@@ -68,6 +68,7 @@ class SignalGenerator:
         self._llm = LLMAnalyzer()
         self._scorer = Scorer(self.config)
         self._sizer = PositionSizer(self.capital, self.config)
+        self.candidates: List[Dict] = []
 
     async def __aenter__(self) -> "SignalGenerator":
         self._krx = KRXCollector(self.config)
@@ -252,38 +253,88 @@ class SignalGenerator:
     def _record_candidate(
         self,
         stock: StockData,
-        score: Optional[Dict] = None,
-        checklist: Optional[Dict] = None,
+        score=None,
+        checklist=None,
         grade: Optional[Grade] = None,
         passed: bool = False,
         reason: str = "",
     ) -> None:
         """
         후보 종목을 self.candidates에 기록합니다.
-        
-        passed=True 시: 통과 종목 기록
-        passed=False 시: 거부 사유와 함께 기록
+
+        passed=True  → 통과 종목 (reasons 비어있음)
+        passed=False → 거부 사유 카테고리 산출 후 reasons 에 누적
+        reason       → 외부에서 명시 사유 (예외 케이스) 직접 주입
         """
-        candidate = {
-            "code": stock.code,
+        if not hasattr(self, "candidates") or self.candidates is None:
+            self.candidates = []
+
+        total = (
+            score.total if score is not None and hasattr(score, "total")
+            else (score.get("total", 0) if isinstance(score, dict) else 0)
+        )
+        grade_val = (
+            grade.value if grade is not None and hasattr(grade, "value")
+            else (str(grade) if grade is not None else "?")
+        )
+
+        reasons: List[str] = []
+        if reason:
+            reasons.append(reason)
+        if not passed and score is not None:
+            reasons.extend(self._build_reject_reasons(stock, score, checklist))
+
+        candidate: Dict = {
+            "ticker": stock.code,
             "name": stock.name,
             "market": stock.market,
-            "current_price": stock.close,
-            "change_pct": stock.change_pct,
-            "trading_value": stock.trading_value,
             "passed": passed,
+            "score": total,
+            "grade": grade_val,
+            "current_price": int(round(stock.close)),
+            "change_pct": round(stock.change_pct, 2),
+            "trading_value": stock.trading_value,
+            "reasons": reasons,
         }
-        
-        if score:
-            candidate["score"] = score.get("total", 0) if isinstance(score, dict) else getattr(score, "total", 0)
-        if grade:
-            candidate["grade"] = grade.value if hasattr(grade, "value") else str(grade)
-        if checklist:
-            candidate["checklist"] = checklist
-        if reason:
-            candidate["reason"] = reason
-        
+        if score is not None and hasattr(score, "to_dict"):
+            candidate["score_breakdown"] = score.to_dict()
+
         self.candidates.append(candidate)
+
+    def _build_reject_reasons(
+        self, stock: StockData, score, checklist
+    ) -> List[str]:
+        """Grade C 떨어진 후보의 카테고리별 한글 사유 생성."""
+        reasons: List[str] = []
+        gc_b = self.config.get_grade_config(Grade.B)
+
+        score_total = getattr(score, "total", 0)
+        # 1) 점수 미달
+        if score_total < gc_b.min_score:
+            reasons.append(f"낮은 점수({score_total}점, B등급 {gc_b.min_score}점 필요)")
+        # 2) 거래대금 미달
+        if stock.trading_value < gc_b.min_trading_value:
+            reasons.append(
+                f"거래대금 미달({stock.trading_value/1e8:,.0f}억, "
+                f"B등급 {gc_b.min_trading_value/1e8:,.0f}억 필요)"
+            )
+        # 3) 양쪽 다 통과인데 C 면 약한 등급으로만 명시
+        if not reasons:
+            reasons.append(f"약한 Grade(C등급, 총점 {score_total}점)")
+
+        # 보조 사유 (체크리스트)
+        if checklist is not None:
+            if not getattr(checklist, "consolidation_done", False):
+                reasons.append("VCP 미성숙(횡보 수축 미달)")
+            if not getattr(checklist, "long_candle", False):
+                reasons.append("당일 캔들 약함(장대양봉 아님)")
+            if not (
+                getattr(checklist, "is_new_high", False)
+                or getattr(checklist, "ma_aligned", False)
+            ):
+                reasons.append("차트 약세(신고가·정배열 둘 다 미충족)")
+
+        return reasons
 
     def save_candidates_to_json(self) -> Optional[Path]:
         """
