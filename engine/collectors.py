@@ -73,28 +73,50 @@ class KRXCollector:
         """
         당일 등락률 상위 종목 조회.
 
-        Args:
-            market: "KOSPI" 또는 "KOSDAQ"
-            top_n: 조회할 종목 수
+        2026-05 부터 기본 소스를 pykrx → 네이버 금융(`engine.data_fetcher`) 으로
+        교체했다. KRX 통계 페이지가 빈 응답을 자주 던지는 이슈 회피.
 
-        Returns:
-            등락률 내림차순 정렬된 StockData 리스트
+        환경변수 ``JONGGA_DATA_SOURCE`` 로 강제 지정 가능 (``naver`` | ``pykrx``).
+        기본값은 ``naver``.
         """
+        import os
+        source = os.getenv("JONGGA_DATA_SOURCE", "naver").lower()
+        if source == "pykrx":
+            return await self._top_gainers_pykrx(market, top_n)
+        return await self._top_gainers_naver(market, top_n)
+
+    async def _top_gainers_naver(
+        self, market: str, top_n: int
+    ) -> List[StockData]:
+        """네이버 금융 시가총액 상위 페이지 → 필터 → 등락률 내림차순 top_n."""
+        from engine.data_fetcher import naver_top_gainers
         try:
-            import pykrx.stock as stock  # pykrx는 임포트 자체에 시간이 걸림
+            return await asyncio.to_thread(
+                naver_top_gainers,
+                market=market,
+                top_n=top_n,
+                min_trading_value=self.config.min_trading_value,
+                max_change_pct=self.config.max_change_pct,
+                min_close_price=self.config.min_close_price,
+            )
+        except Exception as e:
+            logger.error(f"[KRXCollector] naver get_top_gainers 오류: {e}")
+            return []
+
+    async def _top_gainers_pykrx(
+        self, market: str, top_n: int
+    ) -> List[StockData]:
+        """기존 pykrx 경로 (백업용)."""
+        try:
+            import pykrx.stock as stock
 
             today_str = date.today().strftime("%Y%m%d")
-
-            # pykrx 동기 호출을 스레드 풀에서 실행
             df = await asyncio.to_thread(
                 stock.get_market_ohlcv_by_ticker, today_str, market=market
             )
-
             if df is None or df.empty:
-                logger.warning(f"[KRXCollector] {market} 데이터 없음 (장 마감 전이거나 휴장일)")
+                logger.warning(f"[KRXCollector] pykrx {market} 데이터 없음")
                 return []
-
-            # 필터: 설정값 기준 필터 적용 후 상위 top_n 추출
             df = df[df["거래대금"] >= self.config.min_trading_value]
             df = df[df["등락률"] <= self.config.max_change_pct]
             df = df[df["종가"] >= self.config.min_close_price]
@@ -104,23 +126,17 @@ class KRXCollector:
             for ticker, row in df.iterrows():
                 name = await asyncio.to_thread(stock.get_market_ticker_name, ticker)
                 await asyncio.sleep(self.REQUEST_DELAY_SEC)
-
                 results.append(StockData(
-                    code=str(ticker),
-                    name=name,
-                    market=market,
-                    sector="",  # 섹터는 별도 API 호출 필요
+                    code=str(ticker), name=name, market=market, sector="",
                     close=float(row.get("종가", 0)),
                     change_pct=float(row.get("등락률", 0)),
                     trading_value=int(row.get("거래대금", 0)),
                     volume=int(row.get("거래량", 0)),
                     marcap=int(row.get("시가총액", 0)) if "시가총액" in row else 0,
                 ))
-
             return results
-
         except Exception as e:
-            logger.error(f"[KRXCollector] get_top_gainers 오류: {e}")
+            logger.error(f"[KRXCollector] pykrx get_top_gainers 오류: {e}")
             return []
 
     async def get_stock_detail(self, code: str) -> Optional[StockData]:

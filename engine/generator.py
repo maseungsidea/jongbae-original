@@ -91,6 +91,9 @@ class SignalGenerator:
         """
         전체 마켓 스크리닝을 실행하여 시그널 목록을 반환합니다.
 
+        모든 후보의 채점 결과를 ``self.candidates`` 에 누적 (passed + rejected).
+        이후 save_candidates_to_json() 으로 별도 파일에 저장 가능.
+
         Args:
             target_date: 분석 기준일 (None이면 오늘)
             markets: 분석할 시장 목록 (기본: ["KOSPI", "KOSDAQ"])
@@ -101,6 +104,9 @@ class SignalGenerator:
         """
         if markets is None:
             markets = ["KOSPI", "KOSDAQ"]
+
+        # 이번 실행의 후보 누적 컨테이너 — passed + rejected 모두 기록
+        self.candidates: List[Dict] = []
 
         t_start = time.perf_counter()
         all_stocks: List[StockData] = []
@@ -130,8 +136,10 @@ class SignalGenerator:
         signals.sort(key=lambda s: (grade_order.get(s.grade, 9), -s.score.total))
 
         elapsed = (time.perf_counter() - t_start) * 1000
+        passed_n = sum(1 for c in self.candidates if c.get("passed"))
         logger.info(
-            f"[Generator] 완료: {len(signals)}개 시그널 생성 ({elapsed:.0f}ms)"
+            f"[Generator] 완료: {len(signals)}개 시그널 / {len(self.candidates)} "
+            f"후보 평가 (통과 {passed_n}) ({elapsed:.0f}ms)"
         )
         return signals
 
@@ -147,7 +155,7 @@ class SignalGenerator:
         1. 차트·뉴스·수급 병렬 수집
         2. LLM 뉴스 분석
         3. 12점 채점 + 등급 결정
-        4. Grade C이면 None 반환
+        4. Grade C이면 None 반환 (사유와 함께 self.candidates 에 기록)
         5. PositionSizer로 포지션 계산
         6. Signal 객체 생성
         """
@@ -175,8 +183,11 @@ class SignalGenerator:
                 )
                 grade = self._scorer.determine_grade(stock, score)
 
-                # 4. 미달 필터
+                # 4. 미달 필터 → 거부 사유 기록 후 종료
                 if grade == Grade.C:
+                    self._record_candidate(
+                        stock, score, checklist, grade, passed=False,
+                    )
                     return None
 
                 # 5. 포지션 계산 (ATR 가용 시 ATR 기반 stop)
@@ -197,9 +208,9 @@ class SignalGenerator:
                     logger.debug(f"ATR 계산 실패 ({stock.code}): {_e}")
                 pos = self._sizer.calculate(stock.close, grade, atr_value=atr_today)
 
-                # 6. Signal 생성
+                # 6. Signal 생성 + 후보 기록 (통과)
                 now = datetime.now()
-                return Signal(
+                signal = Signal(
                     stock_code=stock.code,
                     stock_name=stock.name,
                     market=stock.market,
@@ -223,10 +234,97 @@ class SignalGenerator:
                     status=SignalStatus.PENDING,
                     created_at=now,
                 )
+                
+                # 통과 후보 기록
+                self._record_candidate(stock, score, checklist, grade, passed=True)
+                
+                return signal
 
             except Exception as e:
+                # 예외 케이스: 후보 기록 후 None 반환
+                self._record_candidate(
+                    stock, None, None, None, passed=False, 
+                    reason=f"분석 오류: {str(e)[:50]}"
+                )
                 logger.warning(f"[Generator] {stock.code}({stock.name}) 분석 오류: {e}")
                 return None
+
+    def _record_candidate(
+        self,
+        stock: StockData,
+        score: Optional[Dict] = None,
+        checklist: Optional[Dict] = None,
+        grade: Optional[Grade] = None,
+        passed: bool = False,
+        reason: str = "",
+    ) -> None:
+        """
+        후보 종목을 self.candidates에 기록합니다.
+        
+        passed=True 시: 통과 종목 기록
+        passed=False 시: 거부 사유와 함께 기록
+        """
+        candidate = {
+            "code": stock.code,
+            "name": stock.name,
+            "market": stock.market,
+            "current_price": stock.close,
+            "change_pct": stock.change_pct,
+            "trading_value": stock.trading_value,
+            "passed": passed,
+        }
+        
+        if score:
+            candidate["score"] = score.get("total", 0) if isinstance(score, dict) else getattr(score, "total", 0)
+        if grade:
+            candidate["grade"] = grade.value if hasattr(grade, "value") else str(grade)
+        if checklist:
+            candidate["checklist"] = checklist
+        if reason:
+            candidate["reason"] = reason
+        
+        self.candidates.append(candidate)
+
+    def save_candidates_to_json(self) -> Optional[Path]:
+        """
+        self.candidates를 data/jongga_v2_candidates.json으로 저장합니다.
+        
+        통과 종목과 탈락 종목을 분리하여 저장합니다:
+        {
+            "date": "2026-05-08",
+            "passed_count": N,
+            "rejected_count": M,
+            "passed": [...],
+            "rejected": [...]
+        }
+        """
+        if not self.candidates:
+            logger.info("[Generator] 후보 종목 없음 (저장 스킵)")
+            return None
+        
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        out_path = DATA_DIR / "jongga_v2_candidates.json"
+        
+        passed = [c for c in self.candidates if c.get("passed")]
+        rejected = [c for c in self.candidates if not c.get("passed")]
+        
+        payload = {
+            "date": date.today().isoformat(),
+            "total_evaluated": len(self.candidates),
+            "passed_count": len(passed),
+            "rejected_count": len(rejected),
+            "passed": passed,
+            "rejected": rejected,
+        }
+        
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        
+        logger.info(
+            f"[Generator] 후보 분석 결과 저장: {out_path} "
+            f"(통과 {len(passed)} / 탈락 {len(rejected)})"
+        )
+        return out_path
 
     def get_summary(self, signals: List[Signal]) -> Dict:
         """시그널 목록의 요약 통계를 반환합니다."""
@@ -275,6 +373,9 @@ async def run_screener(
     async with SignalGenerator(config=cfg, capital=capital) as gen:
         signals = await gen.generate(markets=markets, top_n=top_n)
         summary = gen.get_summary(signals)
+        
+        # 후보 분석 결과 저장
+        gen.save_candidates_to_json()
 
     elapsed = (time.perf_counter() - t_start) * 1000
     return ScreenerResult(
