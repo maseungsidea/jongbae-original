@@ -174,6 +174,42 @@ class TestNotifyTodayRecommendations:
             assert notifier.notify_today_recommendations(str(tmp_path / "nope.json")) is False
             m.assert_not_called()
 
+    def test_near_miss_section(self, env_enabled, tmp_path):
+        rec = tmp_path / "today.json"
+        rec.write_text(json.dumps({
+            "date": "2026-05-08", "count": 0, "items": [],
+        }), encoding="utf-8")
+        cand = tmp_path / "candidates.json"
+        cand.write_text(json.dumps({
+            "date": "2026-05-08",
+            "rejected": [
+                {"ticker": "001440", "name": "대한전선", "score": 4,
+                 "change_pct": 12.79, "trading_value": 1_463_100_000_000,
+                 "reasons": ["낮은 점수(4점, B등급 6점 필요)", "VCP 미성숙(횡보 수축 미달)"]},
+                {"ticker": "000990", "name": "DB하이텍", "score": 4,
+                 "change_pct": 6.73, "trading_value": 153_500_000_000,
+                 "reasons": ["낮은 점수(4점, B등급 6점 필요)", "VCP 미성숙(횡보 수축 미달)"]},
+            ],
+        }, ensure_ascii=False), encoding="utf-8")
+        with patch("utils.notifier.urllib.request.urlopen", return_value=_ok_response()) as m:
+            assert notifier.notify_today_recommendations(str(rec), str(cand)) is True
+            text = m.call_args[0][0].data.decode()
+            # 헤더 "아깝게 탈락" url-encoded
+            assert "%EC%95%84%EA%B9%9D%EA%B2%8C" in text
+            assert "001440" in text and "000990" in text
+
+    def test_near_miss_missing_candidates_ok(self, env_enabled, tmp_path):
+        """candidates 파일 없어도 추천 파일만으로 발송된다."""
+        rec = tmp_path / "today.json"
+        rec.write_text(json.dumps({
+            "date": "2026-05-08", "count": 0, "items": [],
+        }), encoding="utf-8")
+        with patch("utils.notifier.urllib.request.urlopen", return_value=_ok_response()) as m:
+            assert notifier.notify_today_recommendations(
+                str(rec), str(tmp_path / "missing.json")
+            ) is True
+            m.assert_called_once()
+
 
 class TestNotifyError:
     def test_with_exception(self, env_enabled):

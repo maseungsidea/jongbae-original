@@ -122,17 +122,25 @@ def notify_order(
 
 def notify_today_recommendations(
     path: str = "data/today_recommendations.json",
-    *, max_items: int = 20,
+    candidates_path: str = "data/jongga_v2_candidates.json",
+    *, max_items: int = 20, max_near_miss: int = 5,
 ) -> bool:
-    """`data/today_recommendations.json` 을 읽어 일일 추천종목 메시지 발송.
+    """일일 추천종목 + 아깝게 탈락한 종목을 단일 텔레그램 메시지로 발송.
 
-    파일이 없거나 비어있으면 "오늘 추천종목 없음" 메시지를 보낸다.
+    Args:
+        path: 통과 종목 슬림 파일 (today_recommendations.json)
+        candidates_path: 후보 전체 결과 파일 (jongga_v2_candidates.json)
+        max_items: 추천(통과) 종목 표시 상한
+        max_near_miss: 아깝게 탈락(점수 상위 미통과) 표시 상한
+
+    파일이 둘 다 없으면 False, 한쪽만 있으면 가능한 섹션만 보낸다.
     """
     e = _escape_html
     try:
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)
     except FileNotFoundError:
+        # 추천 파일 없음 = 스캔 미실행 → 발송 스킵 (near miss 도 의미 없음)
         logger.info(f"[notifier] {path} 없음 → skip")
         return False
     except Exception as ex:
@@ -141,33 +149,74 @@ def notify_today_recommendations(
 
     items = payload.get("items", []) or []
     date_str = payload.get("date") or ""
+
     header = f"📈 <b>오늘 추천종목</b>"
     if date_str:
         header += f" ({e(date_str)})"
 
-    if not items:
-        return send_message(f"{header}\n조건에 맞는 종목 없음")
-
     lines = [header]
-    for i, it in enumerate(items[:max_items], start=1):
-        grade = e(str(it.get("grade", "")))
-        name = e(str(it.get("name", "")))
-        ticker = e(str(it.get("ticker", "")))
-        score = it.get("score", 0)
-        price = it.get("price", 0)
-        tv = it.get("trading_value", 0) or 0
-        line = (
-            f"{i}. <b>{name}</b> ({ticker}) [Grade {grade}] "
-            f"{score}점 · {price:,}원"
-        )
-        if tv:
-            line += f" · 거래대금 {tv/1e8:,.0f}억"
-        lines.append(line)
+    if items:
+        for i, it in enumerate(items[:max_items], start=1):
+            grade = e(str(it.get("grade", "")))
+            name = e(str(it.get("name", "")))
+            ticker = e(str(it.get("ticker", "")))
+            score = it.get("score", 0)
+            price = it.get("price", 0)
+            tv = it.get("trading_value", 0) or 0
+            line = (
+                f"{i}. <b>{name}</b> ({ticker}) [Grade {grade}] "
+                f"{score}점 · {price:,}원"
+            )
+            if tv:
+                line += f" · 거래대금 {tv/1e8:,.0f}억"
+            lines.append(line)
+        if len(items) > max_items:
+            lines.append(f"… 외 {len(items) - max_items}개")
+    else:
+        lines.append("조건에 맞는 종목 없음")
 
-    if len(items) > max_items:
-        lines.append(f"… 외 {len(items) - max_items}개")
+    # 아깝게 탈락 (score 내림차순 상위 max_near_miss 개)
+    near_miss_lines = _format_near_miss(candidates_path, max_near_miss, e)
+    if near_miss_lines:
+        lines.append("")
+        lines.extend(near_miss_lines)
 
     return send_message("\n".join(lines))
+
+
+def _format_near_miss(candidates_path: str, max_n: int, e) -> list:
+    """후보 JSON 에서 점수 상위 탈락 종목 라인 빌드. 파일/데이터 없으면 []."""
+    try:
+        with open(candidates_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as ex:
+        logger.warning(f"[notifier] {candidates_path} 읽기 실패: {ex}")
+        return []
+
+    rejected = payload.get("rejected", []) or []
+    if not rejected:
+        return []
+
+    # 점수 DESC, 동점이면 거래대금 DESC
+    rejected_sorted = sorted(
+        rejected,
+        key=lambda c: (-int(c.get("score", 0) or 0), -int(c.get("trading_value", 0) or 0)),
+    )[:max_n]
+
+    out = ["🥲 <b>아깝게 탈락한 종목</b>"]
+    for i, c in enumerate(rejected_sorted, start=1):
+        name = e(str(c.get("name", "")))
+        ticker = e(str(c.get("ticker", "")))
+        score = c.get("score", 0)
+        change = c.get("change_pct", 0) or 0
+        reasons = c.get("reasons", []) or []
+        reason_short = " / ".join(e(str(r)) for r in reasons[:2]) or "-"
+        out.append(
+            f"{i}. <b>{name}</b> ({ticker}) {score}점 · {change:+.2f}%\n   {reason_short}"
+        )
+    return out
 
 
 def notify_error(context: str, err: BaseException) -> bool:
