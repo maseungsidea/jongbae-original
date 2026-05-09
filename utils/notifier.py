@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.telegram.org"
 TIMEOUT_SEC = 5
+APP_PREFIX = "[종가배팅앱(오리지널)]"
 
 
 def _enabled() -> bool:
@@ -48,7 +49,10 @@ def _escape_html(s: str) -> str:
 
 
 def send_message(text: str, *, parse_mode: str = "HTML") -> bool:
-    """Telegram 메시지 전송. 실패/비활성 시 False, 성공 시 True."""
+    """Telegram 메시지 전송. 실패/비활성 시 False, 성공 시 True.
+
+    모든 메시지 상단에 ``APP_PREFIX`` 가 자동 붙는다 (앱 식별용).
+    """
     if not _enabled():
         return False
     creds = _credentials()
@@ -56,10 +60,12 @@ def send_message(text: str, *, parse_mode: str = "HTML") -> bool:
         logger.debug("[notifier] TELEGRAM_TOKEN/CHAT_ID 미설정 → skip")
         return False
     token, chat_id = creds
+    # 프리픽스가 이미 붙어있으면 중복 방지
+    body_text = text if text.startswith(APP_PREFIX) else f"{APP_PREFIX}\n{text}"
     url = f"{API_BASE}/bot{token}/sendMessage"
     payload = urllib.parse.urlencode({
         "chat_id": chat_id,
-        "text": text,
+        "text": body_text,
         "parse_mode": parse_mode,
         "disable_web_page_preview": "true",
     }).encode()

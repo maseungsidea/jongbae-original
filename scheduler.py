@@ -170,15 +170,16 @@ def main() -> None:
 
     import schedule  # 주기 모드에서만 필요 (--now 시 미설치 환경도 동작)
     schedule.every().day.at("08:50").do(run_full_update)
-    schedule.every().day.at("15:35").do(run_vcp_scan)
-    schedule.every().day.at("15:40").do(run_signal_tracking)
-    schedule.every().day.at("15:42").do(run_daily_summary)
+    # 사용자 요구: 메시지 15:00 도착. 마감(15:30) 전 인트라데이 가격 기반 스캔.
+    schedule.every().day.at("14:50").do(run_vcp_scan)
+    schedule.every().day.at("14:55").do(run_signal_tracking)
+    schedule.every().day.at("15:00").do(run_daily_summary)
 
     logger.info("[Scheduler] 스케줄 시작 (Ctrl+C 로 종료)")
     logger.info("  08:50 → 데이터 업데이트")
-    logger.info("  15:35 → VCP 스캔")
-    logger.info("  15:40 → 시그널 추적")
-    logger.info("  15:42 → 일일 추천종목 텔레그램 발송")
+    logger.info("  14:50 → VCP 스캔 (인트라데이)")
+    logger.info("  14:55 → 시그널 추적")
+    logger.info("  15:00 → 일일 추천종목 텔레그램 발송")
 
     while True:
         schedule.run_pending()
