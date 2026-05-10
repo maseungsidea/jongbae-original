@@ -66,7 +66,7 @@ class TestRecordCandidate:
         )
         gen._record_candidate(s, score, cl, Grade.C, passed=False)
         reasons = gen.candidates[0]["reasons"]
-        assert any("VCP 미성숙" in r for r in reasons)
+        assert any("변동성 수축 부족" in r and "BB폭" in r for r in reasons)
         assert any("당일 캔들 약함" in r for r in reasons)
         assert any("차트 약세" in r for r in reasons)
 

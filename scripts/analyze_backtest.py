@@ -20,8 +20,13 @@ ROOT = Path(__file__).resolve().parent.parent
 BT_DIR = ROOT / "data" / "backtests"
 
 
-def analyze(trades: list[dict]) -> dict:
-    """trades에서 추가 메트릭 계산. 기간순 정렬 가정."""
+def analyze(trades: list[dict], hold_days: int = 5) -> dict:
+    """trades에서 추가 메트릭 계산. 기간순 정렬 가정.
+
+    hold_days: 평균 보유 일수. Sharpe 연환산에 사용
+        (periods_per_year = 252/hold_days). 일별 거래 가정의 √252 는
+        멀티데이 보유에서 Sharpe 를 (252/hold_days)^0.5 배 부풀린다.
+    """
     if not trades:
         return {"n": 0}
 
@@ -57,7 +62,9 @@ def analyze(trades: list[dict]) -> dict:
     mean_ret = sum(nets) / len(nets)
     var = sum((r - mean_ret) ** 2 for r in nets) / len(nets) if len(nets) > 1 else 0
     std = math.sqrt(var)
-    sharpe = (mean_ret / std) * math.sqrt(252) if std > 0 else 0  # daily-trade Sharpe 근사
+    # 멀티데이 보유 트레이드 → 1년 거래 횟수 = 252/hold_days
+    periods_per_year = 252 / max(hold_days, 1)
+    sharpe = (mean_ret / std) * math.sqrt(periods_per_year) if std > 0 else 0
 
     # 월별 거래 빈도 (entry_date 기반)
     months = set(t["entry_date"][:7] for t in sorted_trades)
@@ -93,7 +100,8 @@ def main():
     rows = []
     for f in files:
         data = json.loads(f.read_text())
-        ext = analyze(data["trades"])
+        hold = int(data.get("config", {}).get("hold_days", 5) or 5)
+        ext = analyze(data["trades"], hold_days=hold)
         s = data["stats"]
         rows.append({
             "label": data["label"],

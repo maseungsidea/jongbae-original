@@ -325,7 +325,12 @@ class SignalGenerator:
         # 보조 사유 (체크리스트)
         if checklist is not None:
             if not getattr(checklist, "consolidation_done", False):
-                reasons.append("VCP 미성숙(횡보 수축 미달)")
+                # 실제 조건: 20일 BB폭 = (upper-lower)/mean ≤ consolidation_bb_squeeze_pct
+                # 'VCP 미성숙' 은 오해 소지 — 단일 BB폭 임계 검사일 뿐.
+                threshold_pct = self.config.consolidation_bb_squeeze_pct * 100
+                reasons.append(
+                    f"변동성 수축 부족 (20일 BB폭 > {threshold_pct:.0f}%)"
+                )
             if not getattr(checklist, "long_candle", False):
                 reasons.append("당일 캔들 약함(장대양봉 아님)")
             if not (

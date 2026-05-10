@@ -136,7 +136,9 @@ class SignalConfig:
 
     # ── ATR 트레일링 (signal_tracker.track_signals) ───────────────
     # 백테 검증 (sw_pe_t8): partial_exit + atr15 + fixed8 target + hold=5d
-    # → WR 55.9%, EV +1.656%, RR 1.26, MDD -53.32%, Sharpe 2.83 (현 최적)
+    # → WR 55.9%, EV +1.656%, RR 1.26, MDD -53.32%, Sharpe ~1.26 (현 최적)
+    #   ※ 과거 보고된 Sharpe 2.83 은 √252 일별 거래 가정 오류 — 5일 보유는
+    #      √(252/5) ≈ 7.1 로 연환산해야 함. analyze_backtest.py 수정됨.
     atr_period: int = 14                     # ATR 계산 기간
     atr_multiplier: float = 1.5              # peak - k×ATR 의 k 값
     max_hold_days: int = 5                   # time_exit 발동 일수

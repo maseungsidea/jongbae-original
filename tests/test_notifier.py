@@ -185,10 +185,10 @@ class TestNotifyTodayRecommendations:
             "rejected": [
                 {"ticker": "001440", "name": "대한전선", "score": 4,
                  "change_pct": 12.79, "trading_value": 1_463_100_000_000,
-                 "reasons": ["낮은 점수(4점, B등급 6점 필요)", "VCP 미성숙(횡보 수축 미달)"]},
+                 "reasons": ["낮은 점수(4점, B등급 6점 필요)", "변동성 수축 부족 (20일 BB폭 > 3%)"]},
                 {"ticker": "000990", "name": "DB하이텍", "score": 4,
                  "change_pct": 6.73, "trading_value": 153_500_000_000,
-                 "reasons": ["낮은 점수(4점, B등급 6점 필요)", "VCP 미성숙(횡보 수축 미달)"]},
+                 "reasons": ["낮은 점수(4점, B등급 6점 필요)", "변동성 수축 부족 (20일 BB폭 > 3%)"]},
             ],
         }, ensure_ascii=False), encoding="utf-8")
         with patch("utils.notifier.urllib.request.urlopen", return_value=_ok_response()) as m:
