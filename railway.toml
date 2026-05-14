@@ -1,0 +1,9 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+# 종가배팅 스케줄러 (KST 08:50/14:50/14:55/15:00 자동 실행)
+# TZ=Asia/Seoul 은 Variables 에서 별도 설정 필요 (schedule 라이브러리가 로컬 시간 기준).
+startCommand = "python scheduler.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

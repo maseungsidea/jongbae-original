@@ -1,0 +1,25 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+.vscode/
+.DS_Store
+
+# 데이터 (Volume 마운트로 별도 관리)
+data/
+logs/
+*.log
+
+# 로컬 전용
+.env
+frontend/
+docs/
+DEVELOPMENT_PLAN.md
+flask_log.txt
+
+# 테스트
+tests/
+test_*.py
