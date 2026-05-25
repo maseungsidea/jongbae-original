@@ -156,6 +156,16 @@ class SignalConfig:
     entry_timing: str = "close"              # close / next_open
     max_gap_pct: float = 1.0                 # 갭 필터 임계 (next_open 전용)
 
+    # ── 고급 매도 로직 ─────────────────────────────────────────
+    # 리서치 기반 (O'Neil, Minervini, 퀀트 연구) — 백테 검증 후 활성화 권장
+    hard_stop_floor_pct: float = 8.0           # ATR trailing 절대 하한: 진입가 대비 -8% (O'Neil 규칙)
+    rsi_overbought_exit_enabled: bool = False  # RSI(2) > threshold 시 익일 청산 (비활성: 백테 필요)
+    rsi_overbought_threshold: float = 90.0     # Connors RSI(2) 과열 기준
+    sanghan_exit_enabled: bool = True          # 상한가(+28%+) 당일 50% 청산 (한국장 특화)
+    sanghan_threshold_pct: float = 28.0        # 상한가 판정 기준 (+28% 이상 = 상한가 근처)
+    regime_gated_hold: bool = False            # 시장 국면별 보유일 조정 (비활성: market_regime 연동 필요)
+    regime_hold_days: dict = field(default_factory=lambda: {"BULL": 5, "NEUTRAL": 4, "BEAR": 2})
+
     # ── LLM 설정 ──────────────────────────────
     llm_news_limit: int = 5                 # LLM에 전달할 최대 뉴스 개수
     llm_timeout_sec: int = 10              # LLM API 타임아웃

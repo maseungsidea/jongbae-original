@@ -13,24 +13,15 @@ import { usePathname } from "next/navigation";
 import ChatWidget from "@/components/ChatWidget";
 
 const NAV_ITEMS = [
-    {
-        href: "/dashboard/kr",
-        label: "KR 오버뷰",
-        icon: "📊",
-        description: "마켓 게이트 & 섹터",
-    },
-    {
-        href: "/dashboard/kr/vcp",
-        label: "VCP 시그널",
-        icon: "📡",
-        description: "수급 + VCP 패턴",
-    },
-    {
-        href: "/dashboard/kr/closing-bet",
-        label: "종가베팅 V2",
-        icon: "⚡",
-        description: "AI 채점 시그널",
-    },
+    { href: "/dashboard/kr",              label: "KR 오버뷰",     icon: "📊", description: "마켓 게이트 & 섹터" },
+    { href: "/dashboard/kr/closing-bet",  label: "종가베팅 V2",   icon: "⚡", description: "AI 12점 채점 시그널" },
+    { href: "/dashboard/kr/vcp",          label: "VCP 시그널",    icon: "📡", description: "수급 + VCP 패턴" },
+    { href: "/dashboard/ocf",             label: "야간 리스크",   icon: "🌙", description: "미국장 선행 지표" },
+    { href: "/dashboard/performance",     label: "수익률",         icon: "📈", description: "성과 & 누적 수익" },
+    { href: "/dashboard/positions",       label: "포지션",         icon: "💼", description: "활성 포지션 & 자금" },
+    { href: "/dashboard/history",         label: "히스토리",       icon: "📋", description: "시그널 전체 기록" },
+    { href: "/dashboard/settings/lab",    label: "파라미터 실험실", icon: "🔬", description: "조건 수치 비교 테스트" },
+    { href: "/dashboard/admin",           label: "관리자",         icon: "⚙️", description: "스케줄러 & 로그" },
 ];
 
 export default function DashboardLayout({
@@ -121,32 +112,42 @@ export default function DashboardLayout({
                 {children}
             </main>
 
-            {/* ─── 하단 탭바 (모바일) ─── */}
+            {/* ─── 하단 탭바 (모바일) — 가로 스크롤로 9개 모두 접근 가능 ─── */}
             <nav
-                className="md:hidden fixed bottom-0 left-0 right-0 flex border-t z-50"
+                className="md:hidden fixed bottom-0 left-0 right-0 border-t z-50 overflow-x-auto"
                 style={{
                     background: "var(--bg-surface)",
                     borderColor: "var(--border-subtle)",
+                    scrollbarWidth: "none",
+                    WebkitOverflowScrolling: "touch",
                 }}
             >
-                {NAV_ITEMS.map((item) => {
-                    const isActive =
-                        item.href === "/dashboard/kr"
-                            ? pathname === "/dashboard/kr"
-                            : pathname.startsWith(item.href);
+                <div className="flex min-w-max">
+                    {NAV_ITEMS.map((item) => {
+                        const isActive =
+                            item.href === "/dashboard/kr"
+                                ? pathname === "/dashboard/kr"
+                                : pathname.startsWith(item.href);
 
-                    return (
-                        <Link
-                            key={item.href}
-                            href={item.href}
-                            className="flex-1 flex flex-col items-center gap-1 py-3 transition-colors"
-                            style={{ color: isActive ? "var(--text-primary)" : "var(--text-muted)" }}
-                        >
-                            <span className="text-xl">{item.icon}</span>
-                            <span className="text-[10px]">{item.label}</span>
-                        </Link>
-                    );
-                })}
+                        return (
+                            <Link
+                                key={item.href}
+                                href={item.href}
+                                className="flex flex-col items-center gap-1 py-3 px-4 transition-colors shrink-0"
+                                style={{ color: isActive ? "var(--text-primary)" : "var(--text-muted)" }}
+                            >
+                                <span className="text-xl">{item.icon}</span>
+                                <span className="text-[9px] whitespace-nowrap">{item.label}</span>
+                                {isActive && (
+                                    <div
+                                        className="absolute bottom-0 h-0.5 w-8 rounded-full"
+                                        style={{ background: "var(--gate-green)" }}
+                                    />
+                                )}
+                            </Link>
+                        );
+                    })}
+                </div>
             </nav>
 
             {/* ─── AI 챗봇 위젯 ─── */}

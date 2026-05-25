@@ -1,0 +1,58 @@
+"""
+통합 진입점 (start.py)
+
+Flask 웹 서버(API + 프론트엔드 정적 파일)와
+스케줄러를 단일 프로세스에서 실행한다.
+
+Railway 배포: 이 파일이 CMD 로 실행됨.
+로컬 개발: python start.py (또는 flask_app.py 따로 + scheduler.py 따로)
+"""
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+def _run_scheduler() -> None:
+    import schedule
+    from scheduler import (
+        run_ocf_check,
+        run_full_update,
+        run_vcp_scan,
+        run_signal_tracking,
+        run_daily_summary,
+    )
+
+    schedule.every().day.at("08:30").do(run_ocf_check)
+    schedule.every().day.at("08:50").do(run_full_update)
+    schedule.every().day.at("14:50").do(run_vcp_scan)
+    schedule.every().day.at("14:55").do(run_signal_tracking)
+    schedule.every().day.at("15:00").do(run_daily_summary)
+
+    logger.info("[Start] 스케줄러 스레드 시작 (08:30/08:50/14:50/14:55/15:00 KST)")
+    while True:
+        schedule.run_pending()
+        time.sleep(30)
+
+
+# 스케줄러를 데몬 스레드로 백그라운드 실행
+_scheduler_thread = threading.Thread(
+    target=_run_scheduler, daemon=True, name="scheduler"
+)
+_scheduler_thread.start()
+
+# Flask 앱 기동 (메인 스레드)
+from flask_app import app as flask_app  # noqa: E402
+
+port = int(os.environ.get("PORT", 5001))
+logger.info(f"[Start] Flask 서버 시작: 0.0.0.0:{port}")
+flask_app.run(host="0.0.0.0", port=port, use_reloader=False, threaded=True)

@@ -225,3 +225,112 @@ export const chatbotAPI = {
         }),
 };
 
+// ── OCF 오버나이트 리스크 ──────────────────────────────
+export interface OCFFlag {
+    name: string;
+    triggered: boolean;
+    value: number;
+    threshold: number;
+    message: string;
+}
+
+export interface OCFResult {
+    date: string;
+    severity: "OK" | "WARNING" | "DANGER";
+    summary: string;
+    flags: OCFFlag[];
+}
+
+// ── 성과 추적 ──────────────────────────────────────────
+export interface PerformanceSummary {
+    total: number;
+    win_rate: number;
+    avg_return: number;
+    by_reason: Record<string, number>;
+}
+
+export interface CumulativeReturn {
+    data: { exit_date: string; cumulative_pnl: number }[];
+}
+
+export interface SignalRow {
+    signal_id: string;
+    ticker: string;
+    name: string;
+    grade: string;
+    signal_date: string;
+    entry_price: number;
+    stop_price: number;
+    target_price: number;
+    status: string;
+    exit_date?: string;
+    exit_price?: number;
+    exit_reason?: string;
+    return_pct?: number;
+    days_held?: number;
+    partial_taken?: number;
+    trailing_stop?: number;
+    peak_price?: number;
+}
+
+export interface SignalHistory {
+    signals: SignalRow[];
+    total: number;
+    page: number;
+    per_page: number;
+}
+
+// ── 관리자 ──────────────────────────────────────────────
+export interface AdminStatus {
+    jobs: Record<string, { last_run?: string; last_result?: string }>;
+    ocf_latest?: OCFResult;
+    data_freshness: Record<string, string>;
+}
+
+// ── 백테 파라미터 비교 ──────────────────────────────────
+export interface BacktestStats {
+    trades: number;
+    ev_pct: number;
+    wr: number;
+    mdd_pct: number;
+    filter_rate?: number;
+    filtered_trades?: number;
+}
+
+export interface BacktestComparison {
+    label: string;
+    baseline: BacktestStats;
+    with_ocf_warning: BacktestStats;
+    with_ocf_danger_only: BacktestStats;
+    ocf_flag_days: Record<string, number>;
+    goal_met: Record<string, boolean>;
+}
+
+export const ocfAPI = {
+    getLatest: () => fetchAPI<OCFResult>("/ocf/latest"),
+};
+
+export const performanceAPI = {
+    getSummary: () => fetchAPI<PerformanceSummary>("/kr/performance"),
+    getCumulativeReturn: () => fetchAPI<CumulativeReturn>("/kr/cumulative-return"),
+    getSignalHistory: (page = 1, strategy = "") =>
+        fetchAPI<SignalHistory>(`/kr/signals/history?page=${page}&strategy=${strategy}`),
+};
+
+export const adminAPI = {
+    getStatus: () => fetchAPI<AdminStatus>("/admin/status"),
+    trigger: (job: string) =>
+        fetchAPI<{ success: boolean; result?: unknown }>(`/admin/trigger/${job}`, {
+            method: "POST",
+        }),
+};
+
+export const backtestAPI = {
+    getLatest: () => fetchAPI<BacktestComparison>("/kr/backtest/latest"),
+    run: (params: Record<string, number>) =>
+        fetchAPI<BacktestComparison>("/kr/backtest/run", {
+            method: "POST",
+            body: JSON.stringify({ params }),
+        }),
+};
+

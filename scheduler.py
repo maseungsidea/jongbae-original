@@ -40,6 +40,54 @@ def _is_trading_day() -> bool:
         return True
 
 
+def run_ocf_check() -> dict:
+    """08:30 실행 — 오버나이트 컨텍스트 필터 (Phase 1: advisory only).
+
+    WARNING/DANGER 감지 시 텔레그램 경보 발송.
+    결과를 data/ocf_latest.json 에 저장 (backtest_with_ocf.py 참조용).
+    """
+    if not _is_trading_day():
+        logger.info("[Scheduler] 휴장일 — OCF 체크 스킵")
+        return {"skipped": True}
+
+    try:
+        import json
+        from pathlib import Path
+        from engine.ocf import run_ocf
+        from utils import notifier
+
+        result = run_ocf()
+
+        out = {
+            "date": result.date.isoformat(),
+            "severity": result.severity,
+            "summary": result.summary,
+            "flags": [
+                {
+                    "name": fl.name,
+                    "triggered": fl.triggered,
+                    "value": fl.value,
+                    "threshold": fl.threshold,
+                    "message": fl.message,
+                }
+                for fl in result.flags
+            ],
+        }
+        Path("data").mkdir(exist_ok=True)
+        with open("data/ocf_latest.json", "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+
+        if result.severity in ("WARNING", "DANGER"):
+            notifier.notify_ocf_alert(result)
+
+        logger.info(f"[Scheduler] OCF 완료: {result.severity} — {result.summary}")
+        return {"severity": result.severity, "summary": result.summary}
+
+    except Exception as e:
+        logger.error(f"[Scheduler] OCF 오류: {e}")
+        return {"error": str(e)}
+
+
 def run_vcp_scan() -> dict:
     """
     VCP 스캔을 실행하고 결과를 JSON으로 저장합니다.
@@ -156,6 +204,11 @@ def run_signal_tracking() -> None:
             partial_exit_ratio=cfg.partial_exit_ratio,
             entry_timing="close",
             max_gap_pct=cfg.max_gap_pct,
+            hard_stop_floor_pct=cfg.hard_stop_floor_pct,
+            rsi_overbought_exit_enabled=cfg.rsi_overbought_exit_enabled,
+            rsi_overbought_threshold=cfg.rsi_overbought_threshold,
+            sanghan_exit_enabled=cfg.sanghan_exit_enabled,
+            sanghan_threshold_pct=cfg.sanghan_threshold_pct,
             log_path=signal_tracker.SIGNAL_LOG_CLOSE_PATH,
         )
         logger.info("[Scheduler] 전략 A 추적 완료 (close)")
@@ -170,6 +223,11 @@ def run_signal_tracking() -> None:
             partial_exit_ratio=cfg.partial_exit_ratio,
             entry_timing="next_open",
             max_gap_pct=1.0,
+            hard_stop_floor_pct=cfg.hard_stop_floor_pct,
+            rsi_overbought_exit_enabled=cfg.rsi_overbought_exit_enabled,
+            rsi_overbought_threshold=cfg.rsi_overbought_threshold,
+            sanghan_exit_enabled=cfg.sanghan_exit_enabled,
+            sanghan_threshold_pct=cfg.sanghan_threshold_pct,
             log_path=signal_tracker.SIGNAL_LOG_NEXT_OPEN_PATH,
         )
         logger.info("[Scheduler] 전략 B 추적 완료 (next_open, gap=1%)")
@@ -214,6 +272,7 @@ def main() -> None:
 
     if args.now:
         logger.info("[Scheduler] 즉시 실행 모드")
+        run_ocf_check()
         run_full_update()
         run_vcp_scan()
         run_signal_tracking()
@@ -221,12 +280,14 @@ def main() -> None:
         return
 
     import schedule  # 주기 모드에서만 필요 (--now 시 미설치 환경도 동작)
+    schedule.every().day.at("08:30").do(run_ocf_check)
     schedule.every().day.at("08:50").do(run_full_update)
     schedule.every().day.at("14:50").do(run_vcp_scan)
     schedule.every().day.at("14:55").do(run_signal_tracking)
     schedule.every().day.at("15:00").do(run_daily_summary)
 
     logger.info("[Scheduler] 스케줄 시작 (Ctrl+C 로 종료)")
+    logger.info("  08:30 → OCF 오버나이트 리스크 체크")
     logger.info("  08:50 → 데이터 업데이트")
     logger.info("  14:50 → VCP 스캔 (휴장일 자동 스킵)")
     logger.info("  14:55 → 시그널 추적 [A:close / B:next_open]")

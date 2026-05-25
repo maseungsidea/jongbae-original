@@ -264,6 +264,11 @@ def track_signals(
     partial_exit_ratio: float = 0.5,
     entry_timing: str = "close",
     max_gap_pct: float = 1.0,
+    hard_stop_floor_pct: float = 8.0,
+    rsi_overbought_exit_enabled: bool = False,
+    rsi_overbought_threshold: float = 90.0,
+    sanghan_exit_enabled: bool = True,
+    sanghan_threshold_pct: float = 28.0,
     log_path: Path = SIGNAL_LOG_PATH,
 ) -> None:
     """
@@ -274,16 +279,35 @@ def track_signals(
       - sw_nopen_gap1 (next_open + 갭 1%): WR 49.5%, EV +2.367%, MDD -48.02%
 
     Args:
-        entry_timing : "close" → 신호일 종가 진입 (기본)
-                       "next_open" → 다음 거래일 시가 진입 (갭 필터 적용)
-        max_gap_pct  : next_open 모드에서 시가 갭이 +X% 초과면 status=invalidated
+        entry_timing              : "close" → 신호일 종가 진입 (기본)
+                                    "next_open" → 다음 거래일 시가 진입 (갭 필터 적용)
+        max_gap_pct               : next_open 모드에서 시가 갭이 +X% 초과면 status=invalidated
+        hard_stop_floor_pct       : 진입가 대비 절대 하한 손절 % (O'Neil 규칙, 0이면 비활성)
+        rsi_overbought_exit_enabled: RSI(2) 과열 시 당일 종가 청산 (Connors RSI, 기본 비활성)
+        rsi_overbought_threshold  : RSI(2) 과열 판정 기준 (기본 90.0)
+        sanghan_exit_enabled      : 상한가(+sanghan_threshold_pct%) 당일 50% 부분 익절
+        sanghan_threshold_pct     : 상한가 판정 기준 등락률 % (기본 28%)
+
+    exit_reason 코드:
+        stop_loss      : ATR trailing stop 터치
+        trailing_stop  : ATR trailing stop 터치 (track_signals 내부 표기 통일)
+        time_exit      : max_hold_days 보유일 초과
+        partial_stop   : 분할 익절 후 trailing stop 청산
+        partial_time   : 분할 익절 후 time_exit 청산
+        hard_stop      : 절대 하한 손절 (-hard_stop_floor_pct%)
+        rsi_overbought : RSI(2) 과열 청산
+        gap_skip       : next_open 갭 초과 무효화
+        manual         : 수동 청산
 
     매일 장 마감 후 1회 호출:
       1) pending 시그널 → next_open 진입/갭 필터 처리
       2) 보유 종목의 OHLC + ATR 갱신
       3) peak_price / trailing_stop 단조 증가 갱신
-      4) low ≤ trailing_stop → trailing_stop 청산
-      5) days_held ≥ max_hold_days → time_exit
+      4) hard_stop_floor 터치 → hard_stop 청산 (ATR 이전 우선)
+      5) 상한가 감지 → sanghan 50% 부분 익절 마킹
+      6) RSI(2) > threshold → rsi_overbought 청산
+      7) low ≤ trailing_stop → trailing_stop 청산
+      8) days_held ≥ max_hold_days → time_exit
     """
     import pykrx.stock as pk_stock
 
@@ -389,6 +413,42 @@ def track_signals(
             prev_partial_taken = bool(_safe_int(row.get("partial_taken")))
             prev_partial_return = _safe_float(row.get("partial_return"))
 
+            # ── 하드 플로어 스탑: 진입가 대비 -hard_stop_floor_pct% 절대 하한 (O'Neil 규칙) ──
+            if hard_stop_floor_pct > 0 and entry_price > 0:
+                hard_floor = entry_price * (1 - hard_stop_floor_pct / 100)
+                if today_low <= hard_floor:
+                    df.at[idx, "status"] = "exited"
+                    df.at[idx, "exit_date"] = today.isoformat()
+                    df.at[idx, "exit_price"] = hard_floor
+                    df.at[idx, "exit_reason"] = "hard_stop"
+                    return_pct = (hard_floor - entry_price) / entry_price * 100
+                    df.at[idx, "return_pct"] = round(return_pct, 2)
+                    df.at[idx, "pnl"] = round(
+                        entry_price * _safe_int(row.get("quantity")) * return_pct / 100, 0
+                    )
+                    logger.info(
+                        f"[signal_tracker] 하드 스탑 청산: {ticker} "
+                        f"{return_pct:+.2f}% (hard floor -{hard_stop_floor_pct}%)"
+                    )
+                    continue
+
+            # ── 상한가 감지: +sanghan_threshold_pct%+ 상승 시 당일 50% 부분 익절 마킹 (한국장 특화) ──
+            if (
+                sanghan_exit_enabled
+                and entry_price > 0
+                and today_high >= entry_price * (1 + sanghan_threshold_pct / 100)
+                and not prev_partial_taken
+            ):
+                sanghan_exit_price = today_high * 0.97  # 실제 체결은 종가 근처 가정 (보수적)
+                partial_pct = (sanghan_exit_price - entry_price) / entry_price * 100
+                prev_partial_taken = True
+                prev_partial_return = partial_pct
+                _update_trailing_fields(idx, df, partial_taken=1, partial_return=round(partial_pct, 2))
+                logger.info(
+                    f"[signal_tracker] 상한가 부분 익절: {ticker} "
+                    f"+{partial_pct:.2f}% (잔량 trailing 유지)"
+                )
+
             state = TrailingState(
                 entry_price=entry_price,
                 peak_price=prev_peak,
@@ -429,6 +489,37 @@ def track_signals(
                 partial_taken=int(state.partial_taken),
                 partial_return=round(prev_partial_return, 2) if state.partial_taken else None,
             )
+
+            # ── RSI(2) 과열 청산 (Connors RSI: RSI(2) > threshold) ──
+            if rsi_overbought_exit_enabled and len(closes) >= 3:
+                gains = [max(closes[i] - closes[i - 1], 0) for i in range(-2, 0)]
+                losses = [max(closes[i - 1] - closes[i], 0) for i in range(-2, 0)]
+                avg_gain = sum(gains) / 2
+                avg_loss = sum(losses) / 2
+                if avg_loss > 0:
+                    rsi2 = 100 - 100 / (1 + avg_gain / avg_loss)
+                    if rsi2 > rsi_overbought_threshold:
+                        remainder_pct = (today_close - entry_price) / entry_price * 100 if entry_price else 0.0
+                        if state.partial_taken:
+                            final_pct = (
+                                partial_exit_ratio * prev_partial_return
+                                + (1 - partial_exit_ratio) * remainder_pct
+                            )
+                        else:
+                            final_pct = remainder_pct
+                        df.at[idx, "status"] = "exited"
+                        df.at[idx, "exit_date"] = today.isoformat()
+                        df.at[idx, "exit_price"] = today_close
+                        df.at[idx, "exit_reason"] = "rsi_overbought"
+                        df.at[idx, "return_pct"] = round(final_pct, 2)
+                        df.at[idx, "pnl"] = round(
+                            entry_price * _safe_int(row.get("quantity")) * final_pct / 100, 0
+                        )
+                        logger.info(
+                            f"[signal_tracker] RSI(2) 과열 청산: {ticker} "
+                            f"RSI={rsi2:.1f} > {rsi_overbought_threshold} → {final_pct:+.2f}%"
+                        )
+                        continue
 
             exit_yn, reason, exit_price = should_exit(
                 state, today_low=today_low, today_close=today_close,

@@ -1,21 +1,28 @@
+# ── Stage 1: Next.js 정적 빌드 ──────────────────────────────
+FROM node:20-slim AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm ci --prefer-offline
+COPY frontend/ ./
+# output: 'export' 설정으로 정적 파일 생성 (Flask 가 서빙)
+RUN npm run build
+
+# ── Stage 2: Python 런타임 ────────────────────────────────────
 FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# 시스템 의존성 (pykrx 빌드용)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
 
 # Python 의존성
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 소스 코드 복사
+# 소스 복사
 COPY . .
 
-# Railway 포트
-ENV PORT=8000
+# Next.js 빌드 결과를 frontend_build/ 로 복사
+COPY --from=frontend-builder /app/frontend/out ./frontend_build
 
-# Gunicorn: Flask API + 스케줄러 백그라운드 실행
-CMD sh -c "python scheduler.py &> /tmp/scheduler.log & gunicorn -b 0.0.0.0:$PORT --workers 1 --threads 4 app:app"
+# Flask API + Scheduler 통합 진입점
+CMD ["python", "-u", "start.py"]

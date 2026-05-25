@@ -230,3 +230,33 @@ def notify_error(context: str, err: BaseException) -> bool:
     e = _escape_html
     text = f"⚠️ <b>{e(context)}</b>\n{e(type(err).__name__)}: {e(str(err))[:300]}"
     return send_message(text)
+
+
+def notify_ocf_alert(result: "object") -> bool:
+    """OCF 경보 알림 (WARNING/DANGER 만 호출).
+
+    Phase 1: 정보 전달 전용 — 시그널 자동취소 없음.
+    result 는 engine.ocf.OCFResult 타입이나 순환 import 방지를 위해 duck-typing.
+    """
+    e = _escape_html
+    severity = getattr(result, "severity", "WARNING")
+    summary = getattr(result, "summary", "")
+    flags = getattr(result, "flags", [])
+    icon = "🚨" if severity == "DANGER" else "⚠️"
+
+    lines = [
+        f"{icon} <b>[OCF {e(severity)}] 오늘 시초가 진입 주의</b>",
+        e(summary),
+        "",
+    ]
+    for fl in flags:
+        if getattr(fl, "triggered", False):
+            msg = getattr(fl, "message", "")
+            lines.append(f"• {e(msg)}")
+
+    lines += [
+        "",
+        "<i>Phase 1: 정보 알림 전용 — 시그널 자동취소 없음</i>",
+        "<i>진입 여부는 직접 판단하세요.</i>",
+    ]
+    return send_message("\n".join(lines))
