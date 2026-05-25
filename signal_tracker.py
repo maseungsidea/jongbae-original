@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent
 SIGNAL_LOG_PATH = ROOT / "data" / "signals_log.csv"
+SIGNAL_LOG_CLOSE_PATH = ROOT / "data" / "signals_log_A_close.csv"
+SIGNAL_LOG_NEXT_OPEN_PATH = ROOT / "data" / "signals_log_B_next_open.csv"
 
 # CSV 컬럼 스키마
 # v2: peak_price / atr_value / trailing_stop / days_held + partial_taken / partial_return 추가
@@ -59,12 +61,12 @@ COLUMNS = [
 ]
 
 
-def _load() -> pd.DataFrame:
+def _load(path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
     """CSV 파일을 로드. 신규 컬럼이 빠진 구버전 CSV 는 자동 backfill."""
-    SIGNAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not SIGNAL_LOG_PATH.exists():
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
         return pd.DataFrame(columns=COLUMNS)
-    df = pd.read_csv(SIGNAL_LOG_PATH, dtype={"ticker": str})
+    df = pd.read_csv(path, dtype={"ticker": str})
     # ATR 트레일링 + partial_exit 컬럼이 없으면 추가 (이전 버전 호환)
     for col in (
         "atr_value", "peak_price", "trailing_stop", "days_held",
@@ -80,12 +82,12 @@ def _load() -> pd.DataFrame:
     return df
 
 
-def _save(df: pd.DataFrame) -> None:
+def _save(df: pd.DataFrame, path: Path = SIGNAL_LOG_PATH) -> None:
     """DataFrame을 CSV로 저장합니다."""
-    df.to_csv(SIGNAL_LOG_PATH, index=False, encoding="utf-8-sig")
+    df.to_csv(path, index=False, encoding="utf-8-sig")
 
 
-def save_signal(signal_dict: dict) -> bool:
+def save_signal(signal_dict: dict, log_path: Path = SIGNAL_LOG_PATH) -> bool:
     """
     새 시그널을 CSV에 저장합니다.
 
@@ -96,7 +98,7 @@ def save_signal(signal_dict: dict) -> bool:
         True (저장 성공), False (중복 또는 오류)
     """
     try:
-        df = _load()
+        df = _load(log_path)
 
         # 중복 방지: 같은 종목+날짜 시그널은 1개만 허용
         ticker = signal_dict.get("stock_code", "")
@@ -135,7 +137,7 @@ def save_signal(signal_dict: dict) -> bool:
             df = new_row
         else:
             df = pd.concat([df, new_row], ignore_index=True)
-        _save(df)
+        _save(df, log_path)
         logger.info(f"[signal_tracker] 저장: {ticker} {signal_date} ({row['grade']}등급)")
         return True
 
@@ -150,6 +152,7 @@ def update_exit(
     exit_price: float,
     exit_reason: str = "manual",
     exit_date: Optional[str] = None,
+    log_path: Path = SIGNAL_LOG_PATH,
 ) -> bool:
     """
     특정 시그널의 청산 정보를 업데이트합니다.
@@ -165,7 +168,7 @@ def update_exit(
         True (업데이트 성공), False (시그널 없음 또는 오류)
     """
     try:
-        df = _load()
+        df = _load(log_path)
         mask = (df["ticker"] == ticker) & (df["signal_date"] == signal_date)
         if not mask.any():
             logger.warning(f"[signal_tracker] 시그널 없음: {ticker} {signal_date}")
@@ -184,7 +187,7 @@ def update_exit(
         df.at[idx, "return_pct"] = round(return_pct, 2)
         df.at[idx, "pnl"] = round(pnl, 0)
 
-        _save(df)
+        _save(df, log_path)
         logger.info(f"[signal_tracker] 청산 기록: {ticker} {exit_reason} ({return_pct:+.1f}%)")
         return True
 
@@ -193,24 +196,24 @@ def update_exit(
         return False
 
 
-def get_open_signals() -> pd.DataFrame:
+def get_open_signals(log_path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
     """미청산(pending 또는 entered) 시그널 목록을 반환합니다."""
-    df = _load()
+    df = _load(log_path)
     if df.empty:
         return df
     return df[df["status"].isin(["pending", "entered"])].copy()
 
 
-def get_today_signals() -> pd.DataFrame:
+def get_today_signals(log_path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
     """당일 생성된 시그널 목록을 반환합니다."""
-    df = _load()
+    df = _load(log_path)
     if df.empty:
         return df
     today = date.today().isoformat()
     return df[df["signal_date"] == today].copy()
 
 
-def persist_screener_result(result) -> int:
+def persist_screener_result(result, log_path: Path = SIGNAL_LOG_PATH) -> int:
     """ScreenerResult 의 모든 Signal 을 signals_log.csv 에 저장.
 
     중복(같은 ticker+signal_date)은 save_signal 이 알아서 skip.
@@ -222,7 +225,7 @@ def persist_screener_result(result) -> int:
             d = sig.to_dict()
         except AttributeError:
             d = dict(sig)
-        if save_signal(d):
+        if save_signal(d, log_path):
             saved += 1
     return saved
 
@@ -261,6 +264,7 @@ def track_signals(
     partial_exit_ratio: float = 0.5,
     entry_timing: str = "close",
     max_gap_pct: float = 1.0,
+    log_path: Path = SIGNAL_LOG_PATH,
 ) -> None:
     """
     미청산 시그널을 ATR 기반 트레일링 스톱으로 자동 추적.
@@ -291,7 +295,7 @@ def track_signals(
         TrailingState,
     )
 
-    df = _load()
+    df = _load(log_path)
     if df.empty:
         logger.info("[signal_tracker] 시그널 없음")
         return
@@ -472,7 +476,7 @@ def track_signals(
         except Exception as e:
             logger.warning(f"[signal_tracker] {ticker} 추적 오류: {e}")
 
-    _save(df)
+    _save(df, log_path)
 
 
 if __name__ == "__main__":

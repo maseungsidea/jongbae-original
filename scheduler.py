@@ -9,8 +9,14 @@
 
 스케줄:
   08:50 - 장 전 데이터 업데이트 (전일 데이터)
-  15:35 - 장 마감 후 VCP 스캔
-  15:40 - 시그널 추적 (손절/익절 자동 기록)
+  14:50 - VCP 스캔 (인트라데이 기준, 휴장일 자동 스킵)
+  14:55 - 전략 A/B 시그널 추적 (당일 종가 진입 / 익일 시초가 진입)
+  15:00 - 일일 추천종목 텔레그램 발송
+
+전략 분리:
+  A (close)     : signals_log_A_close.csv     — 당일 종가 진입 (sw_pe_t8 계열)
+  B (next_open) : signals_log_B_next_open.csv — 익일 시초가 진입, 갭 1% 필터
+  legacy        : signals_log.csv             — 하위호환 (전략 A 와 동일 시그널)
 """
 
 from __future__ import annotations
@@ -24,28 +30,57 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 
+def _is_trading_day() -> bool:
+    """오늘이 거래일인지 확인. 휴장이면 False."""
+    try:
+        from engine.market_utils import is_trading_day
+        return is_trading_day()
+    except Exception as e:
+        logger.warning(f"[Scheduler] 거래일 확인 실패 ({e}) → 진행")
+        return True
+
+
 def run_vcp_scan() -> dict:
     """
     VCP 스캔을 실행하고 결과를 JSON으로 저장합니다.
-    app/routes/kr_market.py 의 /vcp-scan 엔드포인트와 동일한 로직입니다.
+    휴장일에는 자동 스킵됩니다.
+
+    시그널은 세 곳에 동시 저장:
+      - signals_log_A_close.csv     (전략 A)
+      - signals_log_B_next_open.csv (전략 B)
+      - signals_log.csv             (하위호환 legacy)
     """
+    if not _is_trading_day():
+        msg = "휴장일 — VCP 스캔 스킵"
+        logger.info(f"[Scheduler] {msg}")
+        return {"success": False, "message": msg, "skipped": True}
+
     logger.info("[Scheduler] VCP 스캔 시작")
     try:
         import signal_tracker
         from engine.generator import run_screener, save_result_to_json
+
         result = asyncio.run(run_screener(capital=50_000_000))
         path = save_result_to_json(result)
-        # 페이퍼 트래킹: 신규 시그널을 signals_log.csv 에 누적
-        # (track_signals 가 다음 거래일부터 자동으로 ATR/partial 청산 계산)
-        saved = signal_tracker.persist_screener_result(result)
+
+        # 전략 A (close), 전략 B (next_open), legacy 세 곳 저장
+        saved_a = signal_tracker.persist_screener_result(
+            result, log_path=signal_tracker.SIGNAL_LOG_CLOSE_PATH
+        )
+        saved_b = signal_tracker.persist_screener_result(
+            result, log_path=signal_tracker.SIGNAL_LOG_NEXT_OPEN_PATH
+        )
+        saved_legacy = signal_tracker.persist_screener_result(result)  # legacy
+
         msg = (
             f"VCP 스캔 완료: {len(result.signals)}개 시그널 → {path} "
-            f"(트래커 신규 {saved}개)"
+            f"(A:{saved_a} B:{saved_b} legacy:{saved_legacy})"
         )
         logger.info(f"[Scheduler] {msg}")
         return {
             "success": True, "message": msg,
-            "signal_count": len(result.signals), "tracked": saved,
+            "signal_count": len(result.signals),
+            "tracked_a": saved_a, "tracked_b": saved_b,
         }
     except Exception as e:
         logger.error(f"[Scheduler] VCP 스캔 오류: {e}")
@@ -96,22 +131,22 @@ def run_full_update() -> dict:
 
 
 def run_signal_tracking() -> None:
-    """장 마감 후 미청산 시그널 손절/익절 자동 기록.
+    """장 마감 전 미청산 시그널 손절/익절 자동 기록.
 
-    SignalConfig 의 ATR/partial/entry_timing 파라미터를 그대로 사용.
-    환경변수로 override 가능:
-      JONGGA_ENTRY_TIMING (close|next_open)
-      JONGGA_MAX_GAP_PCT (float)
+    전략 A (close)    : signals_log_A_close.csv, entry_timing="close"
+    전략 B (next_open): signals_log_B_next_open.csv, entry_timing="next_open", gap=1%
     """
+    if not _is_trading_day():
+        logger.info("[Scheduler] 휴장일 — 시그널 추적 스킵")
+        return
+
     try:
-        import os
         import signal_tracker
         from engine.config import SignalConfig
 
         cfg = SignalConfig()
-        entry_timing = os.environ.get("JONGGA_ENTRY_TIMING", cfg.entry_timing)
-        max_gap_pct = float(os.environ.get("JONGGA_MAX_GAP_PCT", cfg.max_gap_pct))
 
+        # 전략 A — 당일 종가 진입
         signal_tracker.track_signals(
             atr_period=cfg.atr_period,
             atr_multiplier=cfg.atr_multiplier,
@@ -119,13 +154,26 @@ def run_signal_tracking() -> None:
             partial_exit_enabled=cfg.partial_exit_enabled,
             partial_exit_target_pct=cfg.partial_exit_target_pct,
             partial_exit_ratio=cfg.partial_exit_ratio,
-            entry_timing=entry_timing,
-            max_gap_pct=max_gap_pct,
+            entry_timing="close",
+            max_gap_pct=cfg.max_gap_pct,
+            log_path=signal_tracker.SIGNAL_LOG_CLOSE_PATH,
         )
-        logger.info(
-            f"[Scheduler] 시그널 추적 완료 (entry={entry_timing}, "
-            f"max_gap={max_gap_pct}%)"
+        logger.info("[Scheduler] 전략 A 추적 완료 (close)")
+
+        # 전략 B — 익일 시초가 진입, 갭 1% 필터
+        signal_tracker.track_signals(
+            atr_period=cfg.atr_period,
+            atr_multiplier=cfg.atr_multiplier,
+            max_hold_days=cfg.max_hold_days,
+            partial_exit_enabled=cfg.partial_exit_enabled,
+            partial_exit_target_pct=cfg.partial_exit_target_pct,
+            partial_exit_ratio=cfg.partial_exit_ratio,
+            entry_timing="next_open",
+            max_gap_pct=1.0,
+            log_path=signal_tracker.SIGNAL_LOG_NEXT_OPEN_PATH,
         )
+        logger.info("[Scheduler] 전략 B 추적 완료 (next_open, gap=1%)")
+
     except Exception as e:
         logger.error(f"[Scheduler] 시그널 추적 오류: {e}")
 
@@ -137,6 +185,10 @@ def run_daily_summary() -> None:
     data/today_recommendations.json 을 읽어 단일 메시지로 전송.
     JONGGA_NOTIFY=0 또는 자격증명 부재 시 graceful no-op (notifier 가 가드).
     """
+    if not _is_trading_day():
+        logger.info("[Scheduler] 휴장일 — 일일 요약 스킵")
+        return
+
     try:
         from utils import notifier
         sent = notifier.notify_today_recommendations()
@@ -170,15 +222,14 @@ def main() -> None:
 
     import schedule  # 주기 모드에서만 필요 (--now 시 미설치 환경도 동작)
     schedule.every().day.at("08:50").do(run_full_update)
-    # 사용자 요구: 메시지 15:00 도착. 마감(15:30) 전 인트라데이 가격 기반 스캔.
     schedule.every().day.at("14:50").do(run_vcp_scan)
     schedule.every().day.at("14:55").do(run_signal_tracking)
     schedule.every().day.at("15:00").do(run_daily_summary)
 
     logger.info("[Scheduler] 스케줄 시작 (Ctrl+C 로 종료)")
     logger.info("  08:50 → 데이터 업데이트")
-    logger.info("  14:50 → VCP 스캔 (인트라데이)")
-    logger.info("  14:55 → 시그널 추적")
+    logger.info("  14:50 → VCP 스캔 (휴장일 자동 스킵)")
+    logger.info("  14:55 → 시그널 추적 [A:close / B:next_open]")
     logger.info("  15:00 → 일일 추천종목 텔레그램 발송")
 
     while True:
