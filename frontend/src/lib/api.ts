@@ -280,6 +280,66 @@ export interface SignalHistory {
     per_page: number;
 }
 
+// ── 페이퍼 트레이딩 ──────────────────────────────────────
+
+export interface PaperPosition {
+    id: string;
+    ticker: string;
+    name: string;
+    grade: string;
+    strategy: string;
+    entry_price: number;
+    quantity: number;
+    stop_price: number;
+    target_price: number;
+    invested: number;
+    entry_date: string;
+    status: string;
+    current_price: number;
+    current_value: number;
+    unrealized_pnl: number;
+    unrealized_pct: number;
+}
+
+export interface PaperTrade {
+    id: string;
+    ticker: string;
+    name: string;
+    grade: string;
+    strategy: string;
+    entry_price: number;
+    exit_price: number;
+    quantity: number;
+    invested: number;
+    pnl: number;
+    return_pct: number;
+    entry_date: string;
+    exit_date: string;
+    exit_reason: string;
+}
+
+export interface PaperAccount {
+    seed: number;
+    cash: number;
+    positions_value: number;
+    total_value: number;
+    total_pnl: number;
+    total_return_pct: number;
+    positions: PaperPosition[];
+    trades: PaperTrade[];
+    win_rate: number;
+    trade_count: number;
+    open_count: number;
+}
+
+export const paperAccountAPI = {
+    getSummary: () => fetchAPI<PaperAccount>("/kr/paper-account"),
+    reset: () =>
+        fetchAPI<{ ok: boolean; seed: number; cash: number }>("/kr/paper-account/reset", {
+            method: "POST",
+        }),
+};
+
 // ── 관리자 ──────────────────────────────────────────────
 export interface AdminStatus {
     jobs: Record<string, { last_run?: string; last_result?: string }>;

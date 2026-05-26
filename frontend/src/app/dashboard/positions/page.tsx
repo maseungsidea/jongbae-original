@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { performanceAPI, type SignalRow } from "@/lib/api";
+import { performanceAPI, paperAccountAPI, type SignalRow, type PaperAccount } from "@/lib/api";
 
 // ─── 등급 설정 ───
 const GRADE_CONFIG = {
@@ -19,6 +19,127 @@ const GRADE_CONFIG = {
     B: { badge: "badge-b", glow: "card-glow-blue",   emoji: "✅" },
     C: { badge: "badge-c", glow: "",                 emoji: "⬜" },
 };
+
+// ─── PaperAccountCard: 페이퍼 계좌 현황 ───
+function PaperAccountCard({ account }: { account: PaperAccount | null }) {
+    if (!account) return null;
+    const pnlPositive = account.total_pnl >= 0;
+    const sign = pnlPositive ? "+" : "";
+    const usedPct = Math.min(
+        ((account.total_value - account.cash) / account.seed) * 100,
+        100
+    );
+
+    return (
+        <div className="card p-5 fade-in" style={{ borderColor: pnlPositive ? "rgba(74,222,128,0.25)" : "rgba(248,113,113,0.25)" }}>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div className="flex items-center gap-3">
+                    <span className="text-xl">🏦</span>
+                    <div>
+                        <p className="text-sm font-bold text-white">페이퍼 계좌</p>
+                        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                            씨드 {(account.seed / 10000).toLocaleString()}만원
+                        </p>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <p
+                        className="text-2xl font-bold tabular-nums"
+                        style={{ color: pnlPositive ? "var(--color-up)" : "var(--color-down)" }}
+                    >
+                        {sign}{account.total_return_pct.toFixed(2)}%
+                    </p>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                        {sign}{(account.total_pnl / 10000).toFixed(1)}만원
+                    </p>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="rounded-lg p-3 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>평가총액</p>
+                    <p className="text-sm font-bold tabular-nums text-white">
+                        {(account.total_value / 10000).toFixed(1)}만
+                    </p>
+                </div>
+                <div className="rounded-lg p-3 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>현금</p>
+                    <p className="text-sm font-bold tabular-nums text-white">
+                        {(account.cash / 10000).toFixed(1)}만
+                    </p>
+                </div>
+                <div className="rounded-lg p-3 text-center" style={{ background: "rgba(255,255,255,0.04)" }}>
+                    <p className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>승률</p>
+                    <p className="text-sm font-bold tabular-nums" style={{ color: "var(--color-up)" }}>
+                        {account.win_rate.toFixed(1)}%
+                    </p>
+                </div>
+            </div>
+
+            {/* 투자 비중 바 */}
+            <div className="mb-1 flex justify-between text-xs" style={{ color: "var(--text-muted)" }}>
+                <span>투자 비중</span>
+                <span>{usedPct.toFixed(1)}%</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+                <div
+                    className="h-full rounded-full transition-all duration-700"
+                    style={{
+                        width: `${usedPct}%`,
+                        background: usedPct > 80 ? "var(--gate-red)" : usedPct > 50 ? "var(--gate-yellow)" : "var(--gate-green)",
+                    }}
+                />
+            </div>
+
+            {/* 보유 포지션 미실현 손익 */}
+            {account.positions.length > 0 && (
+                <div className="mt-4 flex flex-col gap-1.5">
+                    {account.positions.map((p) => {
+                        const up = p.unrealized_pnl >= 0;
+                        const s = up ? "+" : "";
+                        return (
+                            <div key={p.id} className="flex justify-between items-center text-xs">
+                                <span style={{ color: "var(--text-secondary)" }}>{p.name} ({p.ticker})</span>
+                                <span
+                                    className="tabular-nums font-medium"
+                                    style={{ color: up ? "var(--color-up)" : "var(--color-down)" }}
+                                >
+                                    {s}{(p.unrealized_pnl / 10000).toFixed(1)}만 ({s}{p.unrealized_pct.toFixed(2)}%)
+                                </span>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {/* 최근 청산 */}
+            {account.trades.length > 0 && (
+                <div className="mt-4">
+                    <p className="text-xs mb-2" style={{ color: "var(--text-muted)" }}>최근 청산</p>
+                    <div className="flex flex-col gap-1">
+                        {account.trades.slice(0, 5).map((t) => {
+                            const win = t.pnl >= 0;
+                            const s = win ? "+" : "";
+                            return (
+                                <div key={`${t.id}-${t.exit_date}`} className="flex justify-between text-xs">
+                                    <span style={{ color: "var(--text-secondary)" }}>
+                                        {t.name} <span style={{ color: "var(--text-muted)" }}>({t.exit_reason})</span>
+                                    </span>
+                                    <span
+                                        className="tabular-nums font-medium"
+                                        style={{ color: win ? "var(--color-up)" : "var(--color-down)" }}
+                                    >
+                                        {s}{t.return_pct.toFixed(2)}%
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
 
 // ─── CapitalSummary: 자금 현황 바 ───
 function CapitalSummary({
@@ -230,18 +351,26 @@ function SkeletonPositions() {
 // ─── 메인 페이지 ───
 export default function PositionsPage() {
     const [positions, setPositions] = useState<SignalRow[]>([]);
+    const [paperAccount, setPaperAccount] = useState<PaperAccount | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     const fetchData = useCallback(async () => {
         try {
             setLoading(true);
-            const data = await performanceAPI.getSignalHistory(1, "open");
-            // 활성(pending/entered) 필터
-            const active = data.signals.filter(
-                (s) => s.status === "pending" || s.status === "entered"
-            );
-            setPositions(active);
+            const [data, account] = await Promise.allSettled([
+                performanceAPI.getSignalHistory(1, "open"),
+                paperAccountAPI.getSummary(),
+            ]);
+            if (data.status === "fulfilled") {
+                const active = data.value.signals.filter(
+                    (s) => s.status === "pending" || s.status === "entered"
+                );
+                setPositions(active);
+            }
+            if (account.status === "fulfilled") {
+                setPaperAccount(account.value);
+            }
             setError(null);
         } catch (e) {
             setError((e as Error).message);
@@ -294,6 +423,9 @@ export default function PositionsPage() {
                 <SkeletonPositions />
             ) : (
                 <div className="flex flex-col gap-5">
+                    {/* 페이퍼 계좌 현황 */}
+                    <PaperAccountCard account={paperAccount} />
+
                     {/* 자금 현황 */}
                     <CapitalSummary positions={positions} />
 

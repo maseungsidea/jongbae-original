@@ -232,6 +232,71 @@ def notify_error(context: str, err: BaseException) -> bool:
     return send_message(text)
 
 
+def notify_paper_entry(
+    *, ticker: str, name: str, entry_price: float, quantity: int,
+    invested: int, grade: str, strategy: str, cash_after: int,
+) -> bool:
+    """페이퍼 트레이딩 진입 알림."""
+    e = _escape_html
+    text = (
+        f"💰 <b>[페이퍼] 진입</b> [{e(grade)}] {e(name)} ({e(ticker)})\n"
+        f"전략 {e(strategy)} · {quantity}주 @ {entry_price:,.0f}원\n"
+        f"투자 <b>{invested/10000:.1f}만원</b> · 잔고 {cash_after/10000:.1f}만원"
+    )
+    return send_message(text)
+
+
+def notify_paper_exit(
+    *, ticker: str, name: str, exit_price: float,
+    pnl: int, return_pct: float, exit_reason: str, cash_after: int,
+) -> bool:
+    """페이퍼 트레이딩 청산 알림."""
+    e = _escape_html
+    sign = "+" if pnl >= 0 else ""
+    icon = "📈" if pnl >= 0 else "📉"
+    text = (
+        f"{icon} <b>[페이퍼] 청산</b> {e(name)} ({e(ticker)})\n"
+        f"사유 {e(exit_reason)} · 청산가 {exit_price:,.0f}원\n"
+        f"손익 <b>{sign}{pnl/10000:.1f}만원</b> ({sign}{return_pct:.2f}%) · 잔고 {cash_after/10000:.1f}만원"
+    )
+    return send_message(text)
+
+
+def notify_paper_portfolio(summary: dict) -> bool:
+    """페이퍼 계좌 현황 알림 (일일 리포트)."""
+    e = _escape_html
+    total_val = summary.get("total_value", 0)
+    total_pnl = summary.get("total_pnl", 0)
+    total_ret = summary.get("total_return_pct", 0.0)
+    cash = summary.get("cash", 0)
+    open_cnt = summary.get("open_count", 0)
+    trade_cnt = summary.get("trade_count", 0)
+    win_rate = summary.get("win_rate", 0.0)
+
+    sign = "+" if total_pnl >= 0 else ""
+    icon = "🟢" if total_pnl >= 0 else "🔴"
+    lines = [
+        f"{icon} <b>[페이퍼 계좌] 일일 현황</b>",
+        f"평가총액  <b>{total_val/10000:.1f}만원</b>  ({sign}{total_ret:.2f}%)",
+        f"현금잔고  {cash/10000:.1f}만원",
+        f"누적손익  {sign}{total_pnl/10000:.1f}만원",
+        f"보유종목  {open_cnt}건  /  체결  {trade_cnt}건  /  승률  {win_rate:.1f}%",
+    ]
+    positions = summary.get("positions", [])
+    if positions:
+        lines.append("")
+        lines.append("── 보유 포지션 ──")
+        for p in positions[:10]:
+            upnl = p.get("unrealized_pnl", 0)
+            upct = p.get("unrealized_pct", 0.0)
+            s = "+" if upnl >= 0 else ""
+            lines.append(
+                f"• {e(p.get('name',''))} ({e(p.get('ticker',''))})  "
+                f"{s}{upnl/10000:.1f}만원 ({s}{upct:.2f}%)"
+            )
+    return send_message("\n".join(lines))
+
+
 def notify_ocf_alert(result: "object") -> bool:
     """OCF 경보 알림 (WARNING/DANGER 만 호출).
 

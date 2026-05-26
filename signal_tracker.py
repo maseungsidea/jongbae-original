@@ -397,11 +397,77 @@ def track_signals(
                     f"close={sig_close:.0f} → open={next_open_px:.0f} "
                     f"(gap={gap_pct:+.2f}%)"
                 )
+                try:
+                    import paper_trading as _pt
+                    from utils import notifier as _ntf
+                    _qty = _safe_int(row.get("quantity"))
+                    if _qty > 0 and next_open_px > 0:
+                        _res = _pt.enter_position(
+                            ticker=ticker,
+                            name=str(row.get("name", ticker)),
+                            entry_price=next_open_px,
+                            quantity=_qty,
+                            stop_price=_safe_float(row.get("stop_price")),
+                            target_price=_safe_float(row.get("target_price")),
+                            grade=str(row.get("grade", "")),
+                            strategy="B_next_open",
+                            signal_id=str(row.get("signal_id", "")),
+                            signal_date=str(row.get("signal_date", "")),
+                        )
+                        if _res.get("ok"):
+                            _ntf.notify_paper_entry(
+                                ticker=ticker,
+                                name=str(row.get("name", ticker)),
+                                entry_price=next_open_px,
+                                quantity=_qty,
+                                invested=_res["position"]["invested"],
+                                grade=str(row.get("grade", "")),
+                                strategy="B_next_open",
+                                cash_after=_res["cash_after"],
+                            )
+                except Exception as _pe:
+                    logger.warning(f"[signal_tracker] paper B진입 오류 ({ticker}): {_pe}")
                 # 진입 당일은 trailing 평가 skip (다음 호출부터 본격 trailing)
                 if sig_idx + 1 == len(ohlc) - 1:
                     continue
                 # ohlc 마지막이 진입일보다 더 이후면 그 시점부터 trailing 평가
                 row = df.loc[idx]
+
+            # ── close 진입: 처음 처리 시 pending → entered 전환 ──────────
+            if entry_timing == "close" and str(row.get("status")) == "pending":
+                df.at[idx, "status"] = "entered"
+                row = df.loc[idx]
+                try:
+                    import paper_trading as _pt
+                    from utils import notifier as _ntf
+                    _qty = _safe_int(row.get("quantity"))
+                    _ep  = _safe_float(row.get("entry_price"))
+                    if _qty > 0 and _ep > 0:
+                        _res = _pt.enter_position(
+                            ticker=ticker,
+                            name=str(row.get("name", ticker)),
+                            entry_price=_ep,
+                            quantity=_qty,
+                            stop_price=_safe_float(row.get("stop_price")),
+                            target_price=_safe_float(row.get("target_price")),
+                            grade=str(row.get("grade", "")),
+                            strategy="A_close",
+                            signal_id=str(row.get("signal_id", "")),
+                            signal_date=str(row.get("signal_date", "")),
+                        )
+                        if _res.get("ok"):
+                            _ntf.notify_paper_entry(
+                                ticker=ticker,
+                                name=str(row.get("name", ticker)),
+                                entry_price=_ep,
+                                quantity=_qty,
+                                invested=_res["position"]["invested"],
+                                grade=str(row.get("grade", "")),
+                                strategy="A_close",
+                                cash_after=_res["cash_after"],
+                            )
+                except Exception as _pe:
+                    logger.warning(f"[signal_tracker] paper A진입 오류 ({ticker}): {_pe}")
 
             entry_price = _safe_float(row.get("entry_price"))
             prev_peak = _safe_float(row.get("peak_price")) or entry_price
@@ -430,6 +496,21 @@ def track_signals(
                         f"[signal_tracker] 하드 스탑 청산: {ticker} "
                         f"{return_pct:+.2f}% (hard floor -{hard_stop_floor_pct}%)"
                     )
+                    try:
+                        import paper_trading as _pt
+                        from utils import notifier as _ntf
+                        _r = _pt.exit_position(ticker=ticker, exit_price=hard_floor,
+                                               exit_reason="hard_stop",
+                                               exit_date=today.isoformat())
+                        if _r.get("ok"):
+                            _ntf.notify_paper_exit(
+                                ticker=ticker, name=str(row.get("name", ticker)),
+                                exit_price=hard_floor, pnl=_r["trade"]["pnl"],
+                                return_pct=_r["trade"]["return_pct"],
+                                exit_reason="hard_stop", cash_after=_r["cash_after"],
+                            )
+                    except Exception as _pe:
+                        logger.warning(f"[signal_tracker] paper hard_stop 청산 오류 ({ticker}): {_pe}")
                     continue
 
             # ── 상한가 감지: +sanghan_threshold_pct%+ 상승 시 당일 50% 부분 익절 마킹 (한국장 특화) ──
@@ -519,6 +600,21 @@ def track_signals(
                             f"[signal_tracker] RSI(2) 과열 청산: {ticker} "
                             f"RSI={rsi2:.1f} > {rsi_overbought_threshold} → {final_pct:+.2f}%"
                         )
+                        try:
+                            import paper_trading as _pt
+                            from utils import notifier as _ntf
+                            _r = _pt.exit_position(ticker=ticker, exit_price=today_close,
+                                                   exit_reason="rsi_overbought",
+                                                   exit_date=today.isoformat())
+                            if _r.get("ok"):
+                                _ntf.notify_paper_exit(
+                                    ticker=ticker, name=str(row.get("name", ticker)),
+                                    exit_price=today_close, pnl=_r["trade"]["pnl"],
+                                    return_pct=_r["trade"]["return_pct"],
+                                    exit_reason="rsi_overbought", cash_after=_r["cash_after"],
+                                )
+                        except Exception as _pe:
+                            logger.warning(f"[signal_tracker] paper rsi_overbought 청산 오류 ({ticker}): {_pe}")
                         continue
 
             exit_yn, reason, exit_price = should_exit(
@@ -557,6 +653,21 @@ def track_signals(
                     f"({final_pct:+.2f}%, hold={state.days_held}d, "
                     f"partial={state.partial_taken})"
                 )
+                try:
+                    import paper_trading as _pt
+                    from utils import notifier as _ntf
+                    _r = _pt.exit_position(ticker=ticker, exit_price=exit_price,
+                                           exit_reason=reason_label,
+                                           exit_date=today.isoformat())
+                    if _r.get("ok"):
+                        _ntf.notify_paper_exit(
+                            ticker=ticker, name=str(row.get("name", ticker)),
+                            exit_price=exit_price, pnl=_r["trade"]["pnl"],
+                            return_pct=_r["trade"]["return_pct"],
+                            exit_reason=reason_label, cash_after=_r["cash_after"],
+                        )
+                except Exception as _pe:
+                    logger.warning(f"[signal_tracker] paper 청산 오류 ({ticker}): {_pe}")
             else:
                 logger.debug(
                     f"[signal_tracker] {ticker} 추적: "

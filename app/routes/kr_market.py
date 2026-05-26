@@ -350,6 +350,40 @@ def update():
 
 
 # ─────────────────────────────────────────
+# 페이퍼 트레이딩 계좌
+# ─────────────────────────────────────────
+
+@kr_bp.route("/paper-account")
+def paper_account():
+    """
+    GET /api/kr/paper-account
+    페이퍼 계좌 현황 (잔고·포지션·손익)
+    """
+    try:
+        import paper_trading as pt
+        summary = pt.get_summary()
+        return jsonify(summary)
+    except Exception as e:
+        logger.error(f"[/paper-account] {e}")
+        return _error(str(e))
+
+
+@kr_bp.route("/paper-account/reset", methods=["POST"])
+def paper_account_reset():
+    """
+    POST /api/kr/paper-account/reset
+    페이퍼 계좌 초기화 (씨드머니 복구)
+    """
+    try:
+        import paper_trading as pt
+        acc = pt.reset_account()
+        return jsonify({"ok": True, "seed": acc["seed"], "cash": acc["cash"]})
+    except Exception as e:
+        logger.error(f"[/paper-account/reset] {e}")
+        return _error(str(e))
+
+
+# ─────────────────────────────────────────
 # 종가베팅 V2 (jongga-v2) 별칭 라우트
 #
 # api.ts의 closingBetAPI가 호출하는 /jongga-v2/* 엔드포인트.

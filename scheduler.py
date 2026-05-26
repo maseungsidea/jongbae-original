@@ -236,6 +236,21 @@ def run_signal_tracking() -> None:
         logger.error(f"[Scheduler] 시그널 추적 오류: {e}")
 
 
+def run_paper_portfolio_report() -> None:
+    """장 마감 후 페이퍼 계좌 현황을 텔레그램으로 발송 (15:05 KST)."""
+    if not _is_trading_day():
+        logger.info("[Scheduler] 휴장일 — 페이퍼 리포트 스킵")
+        return
+    try:
+        import paper_trading as pt
+        from utils import notifier
+        summary = pt.get_summary()
+        sent = notifier.notify_paper_portfolio(summary)
+        logger.info(f"[Scheduler] 페이퍼 리포트 발송: {sent}")
+    except Exception as e:
+        logger.error(f"[Scheduler] 페이퍼 리포트 오류: {e}")
+
+
 def run_daily_summary() -> None:
     """오늘 추천종목 슬림 요약본을 텔레그램으로 발송.
 
@@ -277,6 +292,7 @@ def main() -> None:
         run_vcp_scan()
         run_signal_tracking()
         run_daily_summary()
+        run_paper_portfolio_report()
         return
 
     import schedule  # 주기 모드에서만 필요 (--now 시 미설치 환경도 동작)
@@ -285,6 +301,7 @@ def main() -> None:
     schedule.every().day.at("14:50").do(run_vcp_scan)
     schedule.every().day.at("14:55").do(run_signal_tracking)
     schedule.every().day.at("15:00").do(run_daily_summary)
+    schedule.every().day.at("15:05").do(run_paper_portfolio_report)
 
     logger.info("[Scheduler] 스케줄 시작 (Ctrl+C 로 종료)")
     logger.info("  08:30 → OCF 오버나이트 리스크 체크")
@@ -292,6 +309,7 @@ def main() -> None:
     logger.info("  14:50 → VCP 스캔 (휴장일 자동 스킵)")
     logger.info("  14:55 → 시그널 추적 [A:close / B:next_open]")
     logger.info("  15:00 → 일일 추천종목 텔레그램 발송")
+    logger.info("  15:05 → 페이퍼 계좌 현황 텔레그램 발송")
 
     while True:
         schedule.run_pending()
