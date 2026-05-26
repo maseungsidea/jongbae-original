@@ -6,7 +6,5 @@ dockerfilePath = "Dockerfile"
 # Flask API + Next.js 프론트엔드 + 스케줄러 통합 실행
 # TZ=Asia/Seoul 은 Variables 에서 설정 (schedule 라이브러리 KST 기준)
 startCommand = "python -u start.py"
-healthcheckPath = "/api/health"
-healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
