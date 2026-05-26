@@ -8,8 +8,9 @@ COPY frontend/ ./
 RUN npm run build
 
 # ── Stage 2: Python 런타임 ────────────────────────────────────
-# cache-bust: 2026-05-26
+# cache-bust: 2026-05-26T12:55
 FROM python:3.11-slim
+LABEL buildtime="2026-05-26T12:55"
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
