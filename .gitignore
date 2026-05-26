@@ -26,6 +26,7 @@ logs/
 node_modules/
 frontend/.next/
 frontend/out/
+# frontend_build 은 Railway 업로드용 — gitignore 하지 않음
 
 # OS
 .DS_Store
