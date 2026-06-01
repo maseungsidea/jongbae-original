@@ -270,6 +270,47 @@ def stock_chart(ticker: str):
 
 
 # ─────────────────────────────────────────
+# 시그널 히스토리
+# ─────────────────────────────────────────
+
+@kr_bp.route("/signals/history")
+def signals_history():
+    """GET /api/kr/signals/history?page=1&strategy=A|B&status=open|closed"""
+    import signal_tracker
+
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 20))
+    strategy = request.args.get("strategy", "")
+    status_filter = request.args.get("status", "")
+
+    if strategy == "A":
+        log_path = signal_tracker.SIGNAL_LOG_CLOSE_PATH
+    elif strategy == "B":
+        log_path = signal_tracker.SIGNAL_LOG_NEXT_OPEN_PATH
+    else:
+        log_path = signal_tracker.SIGNAL_LOG_PATH
+
+    df = signal_tracker._load(log_path)
+    if not df.empty:
+        if status_filter == "open":
+            df = df[df["status"].isin(["pending", "entered"])]
+        elif status_filter == "closed":
+            df = df[df["status"].isin(["exited", "invalidated"])]
+        df = df.sort_values("signal_date", ascending=False)
+
+    total = len(df)
+    start = (page - 1) * per_page
+    page_df = df.iloc[start: start + per_page]
+
+    return jsonify({
+        "signals": page_df.fillna("").to_dict(orient="records"),
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    })
+
+
+# ─────────────────────────────────────────
 # 성과 및 수익률
 # ─────────────────────────────────────────
 
