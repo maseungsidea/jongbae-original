@@ -29,6 +29,14 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
+try:
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from hub_client import HubClient as _HubClient
+    _hub = _HubClient("jongbae-original")
+except Exception:
+    _hub = None
+
 
 def _is_trading_day() -> bool:
     """오늘이 거래일인지 확인. 휴장이거나 불확실하면 False."""
@@ -126,6 +134,21 @@ def run_vcp_scan() -> dict:
             f"(A:{saved_a} B:{saved_b} legacy:{saved_legacy})"
         )
         logger.info(f"[Scheduler] {msg}")
+        if _hub:
+            for sig in result.signals:
+                try:
+                    ticker = getattr(sig, "ticker", None) or str(sig)
+                    score = float(getattr(sig, "score", 0) or 0)
+                    _hub.push_signal(ticker, score)
+                except Exception:
+                    pass
+            try:
+                _hub.push_snapshot(
+                    date=date.today().isoformat(),
+                    signal_count=len(result.signals),
+                )
+            except Exception:
+                pass
         return {
             "success": True, "message": msg,
             "signal_count": len(result.signals),
@@ -303,6 +326,8 @@ def main() -> None:
     schedule.every().day.at("14:55").do(run_signal_tracking)
     schedule.every().day.at("15:00").do(run_daily_summary)
     schedule.every().day.at("15:05").do(run_paper_portfolio_report)
+    if _hub:
+        schedule.every(5).minutes.do(_hub.push_heartbeat)
 
     logger.info("[Scheduler] 스케줄 시작 (Ctrl+C 로 종료)")
     logger.info("  08:30 → OCF 오버나이트 리스크 체크")
