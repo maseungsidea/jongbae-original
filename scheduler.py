@@ -31,13 +31,14 @@ logger = logging.getLogger(__name__)
 
 
 def _is_trading_day() -> bool:
-    """오늘이 거래일인지 확인. 휴장이면 False."""
+    """오늘이 거래일인지 확인. 휴장이거나 불확실하면 False."""
     try:
         from engine.market_utils import is_trading_day
         return is_trading_day()
     except Exception as e:
-        logger.warning(f"[Scheduler] 거래일 확인 실패 ({e}) → 진행")
-        return True
+        # fail-closed: 오발송 방지 우선
+        logger.warning(f"[Scheduler] 거래일 확인 실패 ({e}) → 휴장 가정")
+        return False
 
 
 def run_ocf_check() -> dict:

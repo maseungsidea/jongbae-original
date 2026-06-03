@@ -168,6 +168,27 @@ def naver_top_gainers(
         logger.warning(f"[NaverFetcher] {market} 풀이 비어있음")
         return []
 
+    # ── 3차 신선도 gate: pykrx 교차검증 ──────────────────────────────
+    # Naver는 휴일에도 전일 데이터를 반환한다.
+    # pykrx로 오늘 날짜 OHLCV를 조회해 실제 거래가 있는지 재확인.
+    try:
+        import pykrx.stock as _pk
+        import datetime as _dt
+        _today_str = _dt.date.today().strftime("%Y%m%d")
+        _sample = pool[0].code if pool else "005930"
+        _df = _pk.get_market_ohlcv_by_date(_today_str, _today_str, _sample)
+        if _df is None or _df.empty:
+            logger.warning(
+                f"[NaverFetcher] pykrx 교차검증 실패 ({_sample}) — "
+                "오늘 거래 데이터 없음 → Naver 데이터는 전일 데이터로 판단, 스캔 중단"
+            )
+            return []
+        logger.debug(f"[NaverFetcher] pykrx 교차검증 통과 ({_sample})")
+    except Exception as _e:
+        # 교차검증 자체가 실패하면 보수적으로 빈 결과 반환
+        logger.warning(f"[NaverFetcher] pykrx 교차검증 오류 ({_e}) → 빈 결과 반환")
+        return []
+
     filtered = [
         s for s in pool
         if s.trading_value >= min_trading_value

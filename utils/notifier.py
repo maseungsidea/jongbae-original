@@ -142,6 +142,17 @@ def notify_today_recommendations(
     파일이 둘 다 없으면 False, 한쪽만 있으면 가능한 섹션만 보낸다.
     """
     e = _escape_html
+
+    # ── 4차 gate: 발송 직전 거래일 재확인 ──────────────────────────
+    try:
+        from engine.market_utils import is_trading_day
+        if not is_trading_day():
+            logger.info("[notifier] 휴장일 — 추천종목 발송 스킵 (4차 gate)")
+            return False
+    except Exception as _ge:
+        logger.warning(f"[notifier] 거래일 확인 오류 ({_ge}) → 발송 스킵 (fail-closed)")
+        return False
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)

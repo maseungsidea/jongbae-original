@@ -16,7 +16,7 @@ def is_trading_day(d: datetime.date | None = None) -> bool:
     판별 순서:
       1) 주말(토·일) → False
       2) pykrx 삼성전자(005930) 당일 데이터 존재 여부 → 공휴일 대체 포함 판별
-         (pykrx 조회 실패 시 True 로 fallback — false negative 허용)
+         (pykrx 조회 실패 시 False 로 fallback — fail-closed: 불확실하면 휴장 가정)
     """
     if d is None:
         d = datetime.date.today()
@@ -33,5 +33,6 @@ def is_trading_day(d: datetime.date | None = None) -> bool:
             return False
         return True
     except Exception as e:
-        logger.warning(f"[market_utils] 거래일 확인 실패 ({e}) → 개장 가정으로 진행")
-        return True
+        # fail-closed: 불확실하면 휴장으로 간주 (오발송 방지 우선)
+        logger.warning(f"[market_utils] 거래일 확인 실패 ({e}) → 휴장 가정으로 진행")
+        return False

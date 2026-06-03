@@ -423,6 +423,20 @@ async def run_screener(
     Returns:
         ScreenerResult
     """
+    # ── 2차 거래일 gate: 호출 경로(scheduler/API) 무관하게 독립 검증 ──
+    from engine.market_utils import is_trading_day
+    if not is_trading_day():
+        logger.warning("[run_screener] 휴장일 — 스크리닝 중단 (오발송 방지)")
+        return ScreenerResult(
+            date=date.today(),
+            total_candidates=0,
+            filtered_count=0,
+            signals=[],
+            by_grade={},
+            by_market={},
+            processing_time_ms=0.0,
+        )
+
     cfg = config or SignalConfig()
     t_start = time.perf_counter()
 
