@@ -22,7 +22,7 @@ class Grade(Enum):
 
     S: 최고 확신 (10점+, 거래대금 1조+)
     A: 고확신 (8점+, 거래대금 5천억+)
-    B: 보통 (6점+, 거래대금 1천억+)
+    B: 보통 (5점+, 거래대금 1천억+)
     C: 미달 (필터링 대상)
     """
     S = "S"
@@ -122,7 +122,7 @@ class SignalConfig:
     grade_configs: Dict[str, GradeConfig] = field(default_factory=lambda: {
         Grade.S.value: GradeConfig(min_score=10, min_trading_value=1_000_000_000_000, r_multiplier=3.0),
         Grade.A.value: GradeConfig(min_score=8,  min_trading_value=500_000_000_000,   r_multiplier=2.0),
-        Grade.B.value: GradeConfig(min_score=6,  min_trading_value=100_000_000_000,   r_multiplier=1.5),
+        Grade.B.value: GradeConfig(min_score=5,  min_trading_value=100_000_000_000,   r_multiplier=1.5),
         Grade.C.value: GradeConfig(min_score=0,  min_trading_value=0,                 r_multiplier=0.0),
     })
 
@@ -135,8 +135,9 @@ class SignalConfig:
     r_ratio: float = 0.005                  # 1R = 계좌의 0.5%
 
     # ── ATR 트레일링 (signal_tracker.track_signals) ───────────────
-    # 백테 검증 (sw_pe_t8): partial_exit + atr15 + fixed8 target + hold=5d
-    # → WR 55.9%, EV +1.656%, RR 1.26, MDD -53.32%, Sharpe ~1.26 (현 최적)
+    # 백테 검증 (bt_score5_grade): score≥5 Grade B+ + partial_exit + atr15 + fixed8 target + hold=5d
+    # → WR 55.9%, EV +1.656%, RR 1.26 (2026-04 제외 시 EV +0.64%)
+    # 이전 score≥6(bt_score6_grade): 28건 WR 53.6% EV +0.54% — 기준 완화로 전환
     #   ※ 과거 보고된 Sharpe 2.83 은 √252 일별 거래 가정 오류 — 5일 보유는
     #      √(252/5) ≈ 7.1 로 연환산해야 함. analyze_backtest.py 수정됨.
     atr_period: int = 14                     # ATR 계산 기간
