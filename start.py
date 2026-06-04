@@ -35,15 +35,18 @@ def _run_scheduler() -> None:
     try:
         from hub_client import HubClient as _HubClient
         _hub = _HubClient("jongbae-original")
-    except Exception:
+        logger.info("[Heartbeat] hub_client 초기화 완료")
+    except Exception as e:
         _hub = None
+        logger.warning(f"[Heartbeat] hub_client 초기화 실패 (HUB 비활성): {e}")
 
     def _send_heartbeat():
         if _hub:
             try:
                 _hub.push_heartbeat()
-            except Exception:
-                pass
+                logger.debug("[Heartbeat] 전송 완료")
+            except Exception as e:
+                logger.warning(f"[Heartbeat] 전송 실패: {e}")
 
     schedule.every().day.at("08:30").do(run_ocf_check)
     schedule.every().day.at("08:50").do(run_full_update)
