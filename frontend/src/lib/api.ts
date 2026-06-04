@@ -4,7 +4,7 @@
  * 설계 의도:
  * - 모든 API 호출을 이 파일로 중앙 집중화하여 엔드포인트 관리 용이
  * - Generic fetchAPI<T>로 타입 안전성 보장
- * - next.config.ts의 rewrites 덕분에 /api/* 는 Flask(5001)로 자동 프록시
+ * - Flask가 frontend_build/를 서빙하므로 동일 오리진 — /api/* 는 별도 프록시 불필요
  */
 
 // ────────────────────────────────────
