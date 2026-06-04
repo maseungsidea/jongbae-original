@@ -66,7 +66,17 @@ _scheduler_thread = threading.Thread(
 _scheduler_thread.start()
 
 # Flask 앱 기동 (메인 스레드)
-from flask_app import app as flask_app  # noqa: E402
+try:
+    from flask_app import app as flask_app  # noqa: E402
+except Exception as _startup_err:
+    # 기동 실패 시 hub에 즉시 알림 후 재raise (Railway ON_FAILURE 재시작 유지)
+    try:
+        from hub_client import HubClient as _hc
+        _hc("jongbae-original").push_error(f"Flask startup failed: {_startup_err}")
+    except Exception:
+        pass
+    logger.critical(f"[Start] Flask 기동 실패: {_startup_err}")
+    raise
 
 port = int(os.environ.get("PORT", 5001))
 logger.info(f"[Start] Flask 서버 시작: 0.0.0.0:{port}")
