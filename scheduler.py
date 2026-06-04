@@ -273,6 +273,18 @@ def run_paper_portfolio_report() -> None:
         summary = pt.get_summary()
         sent = notifier.notify_paper_portfolio(summary)
         logger.info(f"[Scheduler] 페이퍼 리포트 발송: {sent}")
+        if _hub:
+            try:
+                today_str = date.today().isoformat()
+                today_trades = [t for t in summary.get("trades", []) if t.get("exit_date") == today_str]
+                daily_ret = round(sum(t.get("return_pct", 0) for t in today_trades) / len(today_trades), 2) if today_trades else 0.0
+                _hub.push_snapshot(
+                    date=today_str,
+                    signal_count=summary.get("trade_count", 0),
+                    daily_return_pct=daily_ret,
+                )
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"[Scheduler] 페이퍼 리포트 오류: {e}")
 
