@@ -257,7 +257,8 @@ def _safe_int(value, default: int = 0) -> int:
 
 def track_signals(
     atr_period: int = 14,
-    atr_multiplier: float = 1.5,
+    atr_multiplier: float = 2.0,
+    trailing_min_hold_days: int = 2,
     max_hold_days: int = 5,
     partial_exit_enabled: bool = True,
     partial_exit_target_pct: float = 8.0,
@@ -541,6 +542,7 @@ def track_signals(
             state = update_trailing_stop(
                 state, today_high=today_high, today_close=today_close,
                 today_atr=today_atr, k=atr_multiplier,
+                min_hold_days=trailing_min_hold_days,
             )
 
             # ─ partial_exit 처리: 1차 +8% target 도달 시 50% 익절 ─

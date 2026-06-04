@@ -222,6 +222,7 @@ def run_signal_tracking() -> None:
         signal_tracker.track_signals(
             atr_period=cfg.atr_period,
             atr_multiplier=cfg.atr_multiplier,
+            trailing_min_hold_days=cfg.trailing_min_hold_days,
             max_hold_days=cfg.max_hold_days,
             partial_exit_enabled=cfg.partial_exit_enabled,
             partial_exit_target_pct=cfg.partial_exit_target_pct,
@@ -241,6 +242,7 @@ def run_signal_tracking() -> None:
         signal_tracker.track_signals(
             atr_period=cfg.atr_period,
             atr_multiplier=cfg.atr_multiplier,
+            trailing_min_hold_days=cfg.trailing_min_hold_days,
             max_hold_days=cfg.max_hold_days,
             partial_exit_enabled=cfg.partial_exit_enabled,
             partial_exit_target_pct=cfg.partial_exit_target_pct,

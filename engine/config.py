@@ -141,7 +141,8 @@ class SignalConfig:
     #   ※ 과거 보고된 Sharpe 2.83 은 √252 일별 거래 가정 오류 — 5일 보유는
     #      √(252/5) ≈ 7.1 로 연환산해야 함. analyze_backtest.py 수정됨.
     atr_period: int = 14                     # ATR 계산 기간
-    atr_multiplier: float = 1.5              # peak - k×ATR 의 k 값
+    atr_multiplier: float = 2.0              # peak - k×ATR 의 k 값 (S1: 1.5→2.0, Day-1 shakeout 방지)
+    trailing_min_hold_days: int = 2          # 트레일링 스탑 최소 보유일 (Day-1은 hard_stop 전용)
     max_hold_days: int = 5                   # time_exit 발동 일수
     partial_exit_enabled: bool = True        # 50% 분할 익절 활성화
     partial_exit_target_pct: float = 8.0     # 분할 익절 발동 +8%

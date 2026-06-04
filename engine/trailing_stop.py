@@ -75,18 +75,25 @@ def update_trailing_stop(
     today_high: float,
     today_close: float,
     today_atr: float,
-    k: float = 1.5,
+    k: float = 2.0,
+    min_hold_days: int = 2,
 ) -> TrailingState:
     """
     매 종가 마감 후 호출. peak_price 와 trailing_stop 을 갱신해 반환.
 
     - peak_price 는 today_high 까지만 따라간다 (재진입 X)
     - trailing_stop 은 max(기존, peak - k×ATR) 로 단조 증가
+    - days_held < min_hold_days 인 동안은 trailing 갱신을 보류 (초기 흔들기 방지)
     - days_held += 1
     """
     new_peak = max(state.peak_price, today_high)
-    candidate = new_peak - k * today_atr
-    new_stop = max(state.trailing_stop, candidate)
+
+    # Day-1 보호: min_hold_days 미만이면 trailing 갱신 없이 기존 stop 유지
+    if state.days_held < min_hold_days:
+        new_stop = state.trailing_stop
+    else:
+        candidate = new_peak - k * today_atr
+        new_stop = max(state.trailing_stop, candidate)
 
     return TrailingState(
         entry_price=state.entry_price,
