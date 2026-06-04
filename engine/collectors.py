@@ -85,6 +85,27 @@ class KRXCollector:
             return await self._top_gainers_pykrx(market, top_n)
         return await self._top_gainers_naver(market, top_n)
 
+    async def get_all_liquid_stocks(self, market: str = "KOSPI") -> List[StockData]:
+        """시가총액 상위 전체 스캔 — 급등주 bias 없음.
+
+        change_pct 랭킹 없이 TV ≥ Grade B 기준을 통과하는 종목 전체를 반환.
+        naver_all_liquid_stocks() 를 비동기로 래핑.
+        """
+        from engine.config import Grade
+        from engine.data_fetcher import naver_all_liquid_stocks
+        gc_b = self.config.get_grade_config(Grade.B)
+        try:
+            return await asyncio.to_thread(
+                naver_all_liquid_stocks,
+                market,
+                min_trading_value=gc_b.min_trading_value,
+                max_change_pct=self.config.max_change_pct,
+                min_close_price=self.config.min_close_price,
+            )
+        except Exception as e:
+            logger.error(f"[KRXCollector] get_all_liquid_stocks({market}) 오류: {e}")
+            return []
+
     async def _top_gainers_naver(
         self, market: str, top_n: int
     ) -> List[StockData]:

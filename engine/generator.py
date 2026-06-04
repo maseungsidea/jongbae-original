@@ -112,9 +112,9 @@ class SignalGenerator:
         t_start = time.perf_counter()
         all_stocks: List[StockData] = []
 
-        # 시장별 상위 종목 수집
+        # 시장별 전체 유동성 스캔 (급등주 bias 제거 — TV≥Grade B 기준 전체)
         for market in markets:
-            stocks = await self._krx.get_top_gainers(market, top_n)
+            stocks = await self._krx.get_all_liquid_stocks(market)
             all_stocks.extend(stocks)
             logger.info(f"[Generator] {market} {len(stocks)}개 종목 수집")
 
@@ -450,7 +450,7 @@ async def run_screener(
     elapsed = (time.perf_counter() - t_start) * 1000
     return ScreenerResult(
         date=date.today(),
-        total_candidates=top_n * len(markets or ["KOSPI", "KOSDAQ"]),
+        total_candidates=len(gen.candidates) if hasattr(gen, "candidates") else 0,
         filtered_count=len(signals),
         signals=signals,
         by_grade=summary["by_grade"],

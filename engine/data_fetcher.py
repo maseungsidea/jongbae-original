@@ -137,6 +137,62 @@ def _fetch_page(market: str, page: int) -> List[StockData]:
     return _parse_page(html, market.upper())
 
 
+def naver_all_liquid_stocks(
+    market: str = "KOSPI",
+    *,
+    pages: int = 6,
+    min_trading_value: int = 100_000_000_000,
+    max_change_pct: float = 15.0,
+    min_close_price: int = 1_000,
+) -> List[StockData]:
+    """시가총액 상위 페이지 전체 스캔 — 급등주 bias 없음.
+
+    naver_top_gainers() 와 달리 change_pct 로 정렬하거나 top_n 으로 자르지 않는다.
+    유니버스 = 시가총액 상위 pages×50개 중 필터 통과 전체.
+
+    Args:
+        min_trading_value: 기본 1,000억 (Grade B TV 기준)
+    """
+    pool: List[StockData] = []
+    for page in range(1, pages + 1):
+        rows = _fetch_page(market, page)
+        if not rows:
+            break
+        pool.extend(rows)
+        time.sleep(REQUEST_DELAY_SEC)
+
+    if not pool:
+        logger.warning(f"[NaverFetcher] {market} 풀이 비어있음")
+        return []
+
+    # pykrx 교차검증 — 휴장일 오발송 방지
+    try:
+        import pykrx.stock as _pk
+        import datetime as _dt
+        _today_str = _dt.date.today().strftime("%Y%m%d")
+        _sample = pool[0].code if pool else "005930"
+        _df = _pk.get_market_ohlcv_by_date(_today_str, _today_str, _sample)
+        if _df is None or _df.empty:
+            logger.warning(
+                f"[NaverFetcher] pykrx 교차검증 실패 ({_sample}) → 스캔 중단"
+            )
+            return []
+    except Exception as _e:
+        logger.warning(f"[NaverFetcher] pykrx 교차검증 오류 ({_e}) → 빈 결과 반환")
+        return []
+
+    filtered = [
+        s for s in pool
+        if s.trading_value >= min_trading_value
+        and s.change_pct <= max_change_pct
+        and s.close >= min_close_price
+    ]
+    logger.info(
+        f"[NaverFetcher] {market} 풀 {len(pool)} → 필터 통과 {len(filtered)} (전체 스캔, top_n 없음)"
+    )
+    return filtered
+
+
 def naver_top_gainers(
     market: str = "KOSPI",
     top_n: int = 30,
