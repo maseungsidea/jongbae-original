@@ -7,7 +7,7 @@ CORS 설정, Blueprint 등록, Next.js 정적 파일 서빙을 담당합니다.
 import os
 from pathlib import Path
 
-from flask import Flask, jsonify, send_file, send_from_directory
+from flask import Flask, send_file, send_from_directory
 from flask_cors import CORS
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,11 +32,6 @@ def create_app() -> Flask:
     app.register_blueprint(ocf_bp,      url_prefix="/api/ocf")
     app.register_blueprint(admin_bp,    url_prefix="/api/admin")
     app.register_blueprint(backtest_bp, url_prefix="/api/kr/backtest")
-
-    # ── 헬스체크 ───────────────────────────────────────────
-    @app.route("/api/health")
-    def health_check():
-        return jsonify({"status": "ok", "service": "closing-bet-api"})
 
     # ── Next.js 정적 파일 서빙 ──────────────────────────────
     # frontend_build/ 가 없으면 (로컬 개발 시) API 전용으로 동작
