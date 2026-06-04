@@ -106,11 +106,11 @@ class SignalConfig:
     ma_alignment_days: List[int] = field(default_factory=lambda: [5, 20, 60])  # 이평선 정배열
 
     # 캔들 기준
-    long_candle_body_ratio: float = 0.7     # 장대양봉: 몸통 비율 70% 이상
-    small_upper_wick_ratio: float = 0.1     # 윗꼬리 짧음: 전체 대비 10% 이하
+    long_candle_body_ratio: float = 0.5     # 장대양봉: 몸통 비율 50% 이상 (P2: 70%→50%)
+    small_upper_wick_ratio: float = 0.2     # 윗꼬리 짧음: 전체 대비 20% 이하 (P2: 10%→20%)
 
     # 기간 조정 (횡보) 기준
-    consolidation_bb_squeeze_pct: float = 0.03  # 볼린저 밴드 폭 3% 이하
+    consolidation_bb_squeeze_pct: float = 0.10  # 볼린저 밴드 폭 10% 이하 (P2: 3%→10%)
 
     # 수급 기준
     supply_lookback_days: int = 5           # 외인/기관 순매수 집계 기간
