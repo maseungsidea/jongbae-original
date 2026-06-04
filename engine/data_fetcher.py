@@ -181,11 +181,23 @@ def naver_all_liquid_stocks(
         logger.warning(f"[NaverFetcher] pykrx 교차검증 오류 ({_e}) → 빈 결과 반환")
         return []
 
+    # 섹터 정보 없이 이름 패턴으로 ETF/ETN/리츠/스팩 제외
+    _ETF_PREFIXES = ("KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO", "KOSEF",
+                     "SOL", "ACE", "PLUS", "TIMEFOLIO", "WOORI", "TREX",
+                     "SMART", "파워", "마이다스", "미래에셋", "한국투자")
+    _ETF_KEYWORDS = ("ETF", "ETN", "리츠", "스팩", "SPAC", "인버스", "레버리지")
+
+    def _is_etf_like(name: str) -> bool:
+        nu = name.upper()
+        return any(nu.startswith(p.upper()) for p in _ETF_PREFIXES) or \
+               any(k.upper() in nu for k in _ETF_KEYWORDS)
+
     filtered = [
         s for s in pool
         if s.trading_value >= min_trading_value
         and s.change_pct <= max_change_pct
         and s.close >= min_close_price
+        and not _is_etf_like(s.name)
     ]
     logger.info(
         f"[NaverFetcher] {market} 풀 {len(pool)} → 필터 통과 {len(filtered)} (전체 스캔, top_n 없음)"
