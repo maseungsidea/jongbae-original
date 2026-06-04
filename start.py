@@ -32,13 +32,28 @@ def _run_scheduler() -> None:
         run_daily_summary,
     )
 
+    try:
+        from hub_client import HubClient as _HubClient
+        _hub = _HubClient("jongbae-original")
+    except Exception:
+        _hub = None
+
+    def _send_heartbeat():
+        if _hub:
+            try:
+                _hub.push_heartbeat()
+            except Exception:
+                pass
+
     schedule.every().day.at("08:30").do(run_ocf_check)
     schedule.every().day.at("08:50").do(run_full_update)
     schedule.every().day.at("14:50").do(run_vcp_scan)
     schedule.every().day.at("14:55").do(run_signal_tracking)
     schedule.every().day.at("15:00").do(run_daily_summary)
+    schedule.every(5).minutes.do(_send_heartbeat)
 
-    logger.info("[Start] 스케줄러 스레드 시작 (08:30/08:50/14:50/14:55/15:00 KST)")
+    logger.info("[Start] 스케줄러 스레드 시작 (08:30/08:50/14:50/14:55/15:00 KST + 5분 heartbeat)")
+    _send_heartbeat()  # 즉시 1회 전송
     while True:
         schedule.run_pending()
         time.sleep(30)
