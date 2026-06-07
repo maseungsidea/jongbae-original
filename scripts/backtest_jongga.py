@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT))
 from engine.config import Grade, SignalConfig
 from engine.models import ChartData, StockData, SupplyData
 from engine.scorer import Scorer
+from engine.exit_simulator import ExitParams, simulate_exit
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -97,6 +98,14 @@ def parse_args():
     p.add_argument("--allow-grade", action="store_true",
                    help="determine_grade 통과 + cutoff (운영과 동일)")
     p.add_argument("--hold-days", type=int, default=5)
+    p.add_argument("--exit-engine", choices=["static", "faithful"], default="faithful",
+                   help="faithful=라이브 청산 로직(trailing ratchet·Day-1 보호·hard_stop·분할익절) "
+                        "재현. static=구 고정-stop 근사(--trailing/--target/--partial-exit 사용)")
+    p.add_argument("--close-entry-bar", choices=["eval", "skip"], default="eval",
+                   help="(faithful·close 전용) 진입 바 청산 평가 여부. "
+                        "eval=라이브 fall-through 재현(진입일 hard_stop/trailing 가능, "
+                        "signal_tracker.py:439~485). skip=진입 다음날부터. "
+                        "라이브 진입일 평가는 14:55 진입 시 당일봉 미완성과 얽혀 타이밍 의존적 → 양쪽 측정 권장")
     p.add_argument("--entry-timing", choices=["close", "next_open"], default="close")
     p.add_argument("--trailing", choices=["off", "atr10", "atr15", "atr20", "fixed3"],
                    default="atr15", help="손절 룰. fixed3=고정 -3%")
@@ -169,6 +178,22 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
     trades = []
     next_allow_date = None
 
+    # faithful 엔진: 라이브 SignalConfig 값을 그대로 미러 (max_hold_days 만 --hold-days 로 오버라이드)
+    ep = ExitParams(
+        atr_period=config.atr_period,
+        atr_multiplier=config.atr_multiplier,
+        trailing_min_hold_days=config.trailing_min_hold_days,
+        max_hold_days=args.hold_days,
+        partial_exit_enabled=config.partial_exit_enabled,
+        partial_exit_target_pct=config.partial_exit_target_pct,
+        partial_exit_ratio=config.partial_exit_ratio,
+        hard_stop_floor_pct=config.hard_stop_floor_pct,
+        sanghan_exit_enabled=config.sanghan_exit_enabled,
+        sanghan_threshold_pct=config.sanghan_threshold_pct,
+        rsi_overbought_exit_enabled=config.rsi_overbought_exit_enabled,
+        rsi_overbought_threshold=config.rsi_overbought_threshold,
+    )
+
     for i in range(60, len(df) - 1):
         today = df.iloc[i]
         date_str = str(today["date"])
@@ -234,57 +259,86 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
 
         # exit rules
         atr = compute_atr(window, 14)
-        stop = trailing_stop_value(entry, atr, args.trailing)
-        target = target_value(entry, args.target)
 
-        # 청산 시뮬레이션
-        exit_px = float(exit_window.iloc[-1]["close"])
-        reason = "time"
-        exit_date = str(exit_window.iloc[-1]["date"])
-        partial_done = False
-        partial_return = 0.0   # 부분 청산 시 50% 누적 수익 (gross 기준)
-
-        for _, row in exit_window.iterrows():
-            low = float(row["low"]); high = float(row["high"])
-            row_date = str(row["date"])
-
-            # target hit
-            if target is not None and high >= target and not partial_done:
-                if args.partial_exit:
-                    # 50% 부분 청산: 나머지 50%는 hold 지속, target 무력화
-                    partial_done = True
-                    partial_return = 0.5 * (target / entry - 1.0)
-                    # 다음 row로 (이 row에서 stop 동시 hit 가능성은 무시)
-                    continue
-                else:
-                    exit_px = target; reason = "target"; exit_date = row_date
-                    break
-
-            # stop hit
-            if stop is not None and low <= stop:
-                if partial_done:
-                    remainder = 0.5 * (stop / entry - 1.0)
-                    full_gross = partial_return + remainder
-                    exit_px = entry * (1 + full_gross)   # weighted exit (가상가)
-                    reason = "partial_stop"
-                else:
-                    exit_px = stop
-                    reason = "stop"
-                exit_date = row_date
-                break
+        if args.exit_engine == "faithful":
+            # 라이브 청산 로직 재현 (engine.exit_simulator) — static 근사 대체
+            # 진입 체결 바: close=신호바 i, next_open=익일 i+1.
+            # 라이브(signal_tracker.py:432-434)는 next_open 진입 당일 평가를 skip → 첫 평가는 i+2.
+            # 따라서 entry_idx 를 진입 체결 바로 넘겨 sim 의 eval(entry_idx+1)이 i+2 부터 시작하게 한다.
+            entry_bar = i if args.entry_timing == "close" else i + 1
+            start = max(0, i - 89)
+            sl = df.iloc[start: entry_bar + args.hold_days + 2]
+            entry_local = entry_bar - start
+            # close 는 라이브 fall-through 로 진입 바부터 평가(옵션), next_open 은 진입 당일 skip
+            eval_entry_bar = (args.entry_timing == "close" and args.close_entry_bar == "eval")
+            res = simulate_exit(
+                entry_price=entry,
+                highs=[float(x) for x in sl["high"].tolist()],
+                lows=[float(x) for x in sl["low"].tolist()],
+                closes=[float(x) for x in sl["close"].tolist()],
+                entry_idx=entry_local,
+                params=ep,
+                eval_entry_bar=eval_entry_bar,
+            )
+            exit_px = round(res.exit_price, 2)
+            reason = res.exit_reason
+            gross = res.return_pct / 100.0   # 분할 가중평균이 이미 반영된 gross
+            # 청산 바 절대 df 인덱스 = start + (entry_local + bars_held) = 슬라이스 청산 루프 인덱스
+            exit_df_idx = min(len(df) - 1, start + entry_local + res.bars_held)
+            exit_date = str(df.iloc[exit_df_idx]["date"])
         else:
-            # break 없이 종료 → time exit
-            last_close = float(exit_window.iloc[-1]["close"])
-            if partial_done:
-                remainder = 0.5 * (last_close / entry - 1.0)
-                full_gross = partial_return + remainder
-                exit_px = entry * (1 + full_gross)
-                reason = "partial_time"
-            else:
-                exit_px = last_close
-                reason = "time"
+            stop = trailing_stop_value(entry, atr, args.trailing)
+            target = target_value(entry, args.target)
 
-        gross = exit_px / entry - 1.0
+            # 청산 시뮬레이션 (구 static-stop 근사)
+            exit_px = float(exit_window.iloc[-1]["close"])
+            reason = "time"
+            exit_date = str(exit_window.iloc[-1]["date"])
+            partial_done = False
+            partial_return = 0.0   # 부분 청산 시 50% 누적 수익 (gross 기준)
+
+            for _, row in exit_window.iterrows():
+                low = float(row["low"]); high = float(row["high"])
+                row_date = str(row["date"])
+
+                # target hit
+                if target is not None and high >= target and not partial_done:
+                    if args.partial_exit:
+                        # 50% 부분 청산: 나머지 50%는 hold 지속, target 무력화
+                        partial_done = True
+                        partial_return = 0.5 * (target / entry - 1.0)
+                        # 다음 row로 (이 row에서 stop 동시 hit 가능성은 무시)
+                        continue
+                    else:
+                        exit_px = target; reason = "target"; exit_date = row_date
+                        break
+
+                # stop hit
+                if stop is not None and low <= stop:
+                    if partial_done:
+                        remainder = 0.5 * (stop / entry - 1.0)
+                        full_gross = partial_return + remainder
+                        exit_px = entry * (1 + full_gross)   # weighted exit (가상가)
+                        reason = "partial_stop"
+                    else:
+                        exit_px = stop
+                        reason = "stop"
+                    exit_date = row_date
+                    break
+            else:
+                # break 없이 종료 → time exit
+                last_close = float(exit_window.iloc[-1]["close"])
+                if partial_done:
+                    remainder = 0.5 * (last_close / entry - 1.0)
+                    full_gross = partial_return + remainder
+                    exit_px = entry * (1 + full_gross)
+                    reason = "partial_time"
+                else:
+                    exit_px = last_close
+                    reason = "time"
+
+            gross = exit_px / entry - 1.0
+
         net = gross - FEE_RT
 
         trades.append({
