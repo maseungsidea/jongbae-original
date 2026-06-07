@@ -248,3 +248,138 @@ def reset_account() -> dict:
     _save_account(acc)
     logger.info(f"[paper] 계좌 초기화: 씨드 {SEED_MONEY:,}원")
     return acc
+
+
+# ── 계좌 정합화 (reconcile) ───────────────────────────────────
+# paper_account 은 전략 A(close) 단독 구동 (CLAUDE.md: 전략 A = primary 당일 종가 진입).
+# 전략 B(next_open)는 별도 CSV 로 비교/백테용으로만 추적, 페이퍼 계좌 미구동.
+# legacy signals_log.csv 는 분석·백테용 원장이라 paper_account 와 동기화 대상 아님.
+PAPER_SOURCE_PATH = ROOT / "data" / "signals_log_A_close.csv"
+
+
+def _read_signal_rows(path: Path) -> list[dict]:
+    """전략 신호 CSV(기본 A_close)를 dict 리스트로 로드 (BOM 안전, csv 표준 모듈)."""
+    import csv
+    if not path.exists():
+        return []
+    with open(path, encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
+def reconcile_account(signal_log_path: Optional[Path] = None) -> dict:
+    """signals_log.csv(SoT)로부터 paper_account.json 을 결정론적으로 재구성.
+
+    배경: paper_account.json 과 signals_log.csv 는 별도 원장이라
+    CSV 가 백테/수동/재실행으로 직접 갱신되면 두 원장이 drift 한다.
+    (예: 청산이 CSV 에만 기록되고 paper_account 에 포지션이 잔류)
+
+    해법: CSV 를 단일 진실원장(SoT)으로 삼아 paper_account 를 재구성.
+    enter_position 의 "동일 티커 중복 보유 금지" 가드를 시간순 구간 겹침으로 재현.
+    track_signals() 종료 시 매 사이클 호출 → 자가 치유.
+
+    분할익절(partial_exit) 주의: CSV pnl 은 가중평균(0.5×partial + 0.5×remainder)을
+    반영한 값이고, 라이브 exit_position 은 전량을 최종가로 계산하는 잠정값이다.
+    reconcile 는 CSV pnl 을 authoritative 로 채택 → 매 사이클 종료 시 정합 복원.
+
+    Returns:
+        {"ok", "changed", "before": {...}, "after": {...}, "papered", "skipped"}
+    """
+    path = signal_log_path or PAPER_SOURCE_PATH
+    rows = _read_signal_rows(path)
+
+    # 진입 대상: entered/exited 만. 테스트 픽스처(name==TEST) 제외.
+    cands = [
+        r for r in rows
+        if r.get("status") in ("entered", "exited") and r.get("name") != "TEST"
+    ]
+    cands.sort(key=lambda r: (r.get("signal_date", ""), r.get("created_at", "")))
+
+    # 시간순 구간(interval) 겹침으로 중복 진입 스킵 재현
+    held_intervals: dict = {}   # ticker -> [(entry_date, exit_date|None), ...]
+    papered: list = []
+    skipped: list = []
+    for r in cands:
+        tk = r["ticker"]
+        ed = r.get("signal_date", "")
+        xd = r.get("exit_date") if r.get("status") == "exited" else None
+        xd = xd or None
+        blocked = any(
+            eA <= ed and (xA is None or xA >= ed)
+            for (eA, xA) in held_intervals.get(tk, [])
+        )
+        if blocked:
+            skipped.append(r)
+        else:
+            papered.append(r)
+            held_intervals.setdefault(tk, []).append((ed, xd))
+
+    # 계좌 재구성
+    acc = load_account()
+    seed = acc.get("seed", SEED_MONEY)
+    positions: list = []
+    trades: list = []
+    realized_pnl = 0.0
+    invested_open = 0.0
+
+    for r in papered:
+        qty = int(float(r.get("quantity") or 0))
+        entry = float(r.get("entry_price") or 0)
+        # 라이브 enter_position 가드(signal_tracker: _qty>0 and _ep>0)와 정합 — phantom 방지
+        if qty <= 0 or entry <= 0:
+            continue
+        invested = round(entry * qty)
+        common = {
+            "id":           r.get("signal_id", "")[:8] or "unknown",
+            "ticker":       r["ticker"],
+            "name":         r.get("name", r["ticker"]),
+            "grade":        r.get("grade", ""),
+            "strategy":     "A_close",
+            "entry_price":  entry,
+            "quantity":     qty,
+            "stop_price":   float(r.get("stop_price") or 0),
+            "target_price": float(r.get("target_price") or 0),
+            "invested":     invested,
+            "entry_date":   r.get("signal_date", ""),
+        }
+        if r.get("status") == "exited":
+            pnl = round(float(r.get("pnl") or 0))
+            realized_pnl += pnl
+            trades.append({
+                **common,
+                "exit_price":  float(r.get("exit_price") or 0),
+                "pnl":         pnl,
+                "return_pct":  round(float(r.get("return_pct") or 0), 2),
+                "exit_date":   r.get("exit_date", ""),
+                "exit_reason": r.get("exit_reason", ""),
+            })
+        else:  # entered (미청산)
+            invested_open += invested
+            positions.append({**common, "status": "entered"})
+
+    new_cash = round(seed + realized_pnl - invested_open)
+
+    before = {"cash": acc.get("cash"), "open": len(acc.get("positions", [])),
+              "trades": len(acc.get("trades", []))}
+    after = {"cash": new_cash, "open": len(positions), "trades": len(trades)}
+    changed = before != after
+
+    acc["cash"] = new_cash
+    acc["positions"] = positions
+    acc["trades"] = trades
+    _save_account(acc)
+
+    if changed:
+        logger.info(
+            f"[paper] reconcile: drift 수정 | "
+            f"현금 {before['cash']:,}→{after['cash']:,}원, "
+            f"보유 {before['open']}→{after['open']}건, "
+            f"청산 {before['trades']}→{after['trades']}건 "
+            f"(papered {len(papered)} / skipped {len(skipped)})"
+        )
+    else:
+        logger.debug(f"[paper] reconcile: 정합 상태 (변경 없음)")
+
+    return {
+        "ok": True, "changed": changed, "before": before, "after": after,
+        "papered": len(papered), "skipped": len(skipped),
+    }

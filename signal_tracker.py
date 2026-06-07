@@ -402,7 +402,8 @@ def track_signals(
                     import paper_trading as _pt
                     from utils import notifier as _ntf
                     _qty = _safe_int(row.get("quantity"))
-                    if _qty > 0 and next_open_px > 0:
+                    # paper_account 은 전략 A(close) 단독 구동 — B(next_open)는 공유 계좌 미반영
+                    if entry_timing == "close" and _qty > 0 and next_open_px > 0:
                         _res = _pt.enter_position(
                             ticker=ticker,
                             name=str(row.get("name", ticker)),
@@ -443,7 +444,8 @@ def track_signals(
                     from utils import notifier as _ntf
                     _qty = _safe_int(row.get("quantity"))
                     _ep  = _safe_float(row.get("entry_price"))
-                    if _qty > 0 and _ep > 0:
+                    # paper_account 은 전략 A(close) 단독 구동 (명시적 가드)
+                    if entry_timing == "close" and _qty > 0 and _ep > 0:
                         _res = _pt.enter_position(
                             ticker=ticker,
                             name=str(row.get("name", ticker)),
@@ -500,9 +502,11 @@ def track_signals(
                     try:
                         import paper_trading as _pt
                         from utils import notifier as _ntf
-                        _r = _pt.exit_position(ticker=ticker, exit_price=hard_floor,
-                                               exit_reason="hard_stop",
-                                               exit_date=today.isoformat())
+                        # paper_account 은 전략 A(close) 단독 — B 청산은 공유 계좌 미반영
+                        _r = (_pt.exit_position(ticker=ticker, exit_price=hard_floor,
+                                                exit_reason="hard_stop",
+                                                exit_date=today.isoformat())
+                              if entry_timing == "close" else {"ok": False})
                         if _r.get("ok"):
                             _ntf.notify_paper_exit(
                                 ticker=ticker, name=str(row.get("name", ticker)),
@@ -605,9 +609,10 @@ def track_signals(
                         try:
                             import paper_trading as _pt
                             from utils import notifier as _ntf
-                            _r = _pt.exit_position(ticker=ticker, exit_price=today_close,
-                                                   exit_reason="rsi_overbought",
-                                                   exit_date=today.isoformat())
+                            _r = (_pt.exit_position(ticker=ticker, exit_price=today_close,
+                                                    exit_reason="rsi_overbought",
+                                                    exit_date=today.isoformat())
+                                  if entry_timing == "close" else {"ok": False})
                             if _r.get("ok"):
                                 _ntf.notify_paper_exit(
                                     ticker=ticker, name=str(row.get("name", ticker)),
@@ -658,9 +663,10 @@ def track_signals(
                 try:
                     import paper_trading as _pt
                     from utils import notifier as _ntf
-                    _r = _pt.exit_position(ticker=ticker, exit_price=exit_price,
-                                           exit_reason=reason_label,
-                                           exit_date=today.isoformat())
+                    _r = (_pt.exit_position(ticker=ticker, exit_price=exit_price,
+                                            exit_reason=reason_label,
+                                            exit_date=today.isoformat())
+                          if entry_timing == "close" else {"ok": False})
                     if _r.get("ok"):
                         _ntf.notify_paper_exit(
                             ticker=ticker, name=str(row.get("name", ticker)),

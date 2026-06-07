@@ -258,6 +258,18 @@ def run_signal_tracking() -> None:
         )
         logger.info("[Scheduler] 전략 B 추적 완료 (next_open, gap=1%)")
 
+        # paper_account 정합화 (이중 원장 drift 자가 치유)
+        # paper_account 은 전략 A(close) 단독 구동 — A_close CSV 를 SoT 로 재구성.
+        try:
+            import paper_trading
+            rec = paper_trading.reconcile_account()
+            if rec.get("changed"):
+                logger.warning(f"[Scheduler] paper 계좌 drift 수정: {rec['before']} → {rec['after']}")
+            else:
+                logger.info("[Scheduler] paper 계좌 정합 확인 (drift 없음)")
+        except Exception as _re:
+            logger.error(f"[Scheduler] paper reconcile 오류: {_re}")
+
     except Exception as e:
         logger.error(f"[Scheduler] 시그널 추적 오류: {e}")
 
