@@ -44,6 +44,7 @@ from engine.config import Grade, SignalConfig
 from engine.models import ChartData, StockData, SupplyData
 from engine.scorer import Scorer
 from engine.exit_simulator import ExitParams, simulate_exit
+from engine.trailing_stop import compute_atr as _wilder_atr  # 라이브 진입 게이트와 동일 추정기
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -266,8 +267,18 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
         # ── 변동성 진입 필터 (Sprint 2 후보 2): 진입가 대비 ATR% 가 너무 높은
         #    고변동 종목은 -8% hard_stop 에 노이즈로 걸려 EV 를 갉아먹는다.
         #    ATR% 는 진입 시점에 알 수 있으므로 lookahead 아님. (근본 진입 메커니즘 변경)
+        #    ※ 게이트 ATR 은 라이브(engine.generator)와 동일하게 Wilder ATR 의 마지막 값
+        #      (engine.trailing_stop.compute_atr)을 써야 검증값이 실거동을 그대로 재현한다.
+        #      단순평균 atr(=compute_atr(window)) 은 legacy static-stop 분기/기록용으로만 유지.
         if args.max_atr_pct is not None and entry > 0:
-            atr_pct = atr / entry * 100
+            _wilder = _wilder_atr(
+                [c.high for c in charts],
+                [c.low for c in charts],
+                [c.close for c in charts],
+                period=SignalConfig().atr_period,  # 라이브 generator 와 동일 period (하드코딩 14 금지 — 재튜닝 시 divergence 방지)
+            )
+            atr_gate = _wilder[-1] if _wilder else 0.0
+            atr_pct = atr_gate / entry * 100
             if atr_pct > args.max_atr_pct:
                 continue
 

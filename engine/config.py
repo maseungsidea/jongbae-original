@@ -143,10 +143,16 @@ class SignalConfig:
     atr_period: int = 14                     # ATR 계산 기간
     atr_multiplier: float = 2.0              # peak - k×ATR 의 k 값 (S1: 1.5→2.0, Day-1 shakeout 방지)
     trailing_min_hold_days: int = 2          # 트레일링 스탑 최소 보유일 (Day-1은 hard_stop 전용)
-    max_hold_days: int = 5                   # time_exit 발동 일수
+    max_hold_days: int = 8                   # time_exit 발동 일수 (S2: 5→8, 승자-확대. 5일 cap 이 winner 절단 → faithful 백테 EV +0.88%→+2.0%(IS)/+1.51%(OOS-H1))
     partial_exit_enabled: bool = True        # 50% 분할 익절 활성화
     partial_exit_target_pct: float = 8.0     # 분할 익절 발동 +8%
     partial_exit_ratio: float = 0.5          # 익절 비중 50%
+
+    # ── 진입 변동성 게이트 (S2 root-mechanism, config swap 아님) ──
+    # faithful 백테 근거: hard_stop 손실거래의 진입일 ATR% 중앙값 6.06 vs 승자 4.67.
+    # 고변동성 진입 = noise-stop 다발 → 진입 시점 ATR/진입가×100 > 임계면 신호 기각.
+    # +0.88%→+1.66%(IS)/+1.14%(OOS-H1), OOS 양 반기 모두 개선(robust). None = 비활성.
+    max_atr_pct: float = 5.0                  # 진입일 ATR% 상한 (초과 시 기각)
 
     # ── 진입 타이밍 (sw_nopen_gap1 옵션) ────────────────────────
     # 백테 검증: WR 49.5%, EV +2.367%, MDD -48.02%, Sharpe 3.23

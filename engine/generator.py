@@ -207,6 +207,21 @@ class SignalGenerator:
                             atr_today = atr_series[-1]
                 except Exception as _e:
                     logger.debug(f"ATR 계산 실패 ({stock.code}): {_e}")
+                # 5.5 진입 변동성 게이트 (S2): 진입일 ATR% 초과 시 기각 (포지션 계산 전).
+                #     hard_stop 손실거래(ATR% 중앙값 6.06)를 진입 단계에서 차단.
+                #     atr_today 미산출(데이터 부족) 시 게이트 우회 — 변동성 미측정은 차단 근거 아님(fail-open,
+                #     entry 필터이므로 통과=신호 증가일 뿐 누락 청산 아님). 백테(scripts/backtest_jongga.py)도 동일.
+                #     ATR 추정기는 라이브·백테 모두 Wilder(engine.trailing_stop.compute_atr) 로 일치.
+                max_atr_pct = getattr(self.config, "max_atr_pct", None)
+                if max_atr_pct is not None and atr_today and stock.close > 0:
+                    atr_pct = atr_today / stock.close * 100
+                    if atr_pct > max_atr_pct:
+                        self._record_candidate(
+                            stock, score, checklist, grade, passed=False,
+                            reason=f"진입ATR% {atr_pct:.2f} > 상한 {max_atr_pct:.1f} (고변동성 기각)",
+                        )
+                        return None
+
                 pos = self._sizer.calculate(stock.close, grade, atr_value=atr_today)
 
                 # 6. Signal 생성 + 후보 기록 (통과)

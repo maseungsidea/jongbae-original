@@ -193,3 +193,25 @@ time-exit 이 우상향을 자른다는 가설. `--hold-days` 스윕(ATR%≤5):
 - **IS EV +2.0% 도달** → 앱 프로세스상 "백테 EV 2% 확인" 게이트 충족 → **페이퍼 트래킹 진입 자격**.
 - 단 **OOS-H1 +1.5%** = 신뢰 하한. 레짐/기간 분산이 잔여 격차. **4주 페이퍼 확인 전 실전·발신 금지 유지**.
 - 권장 채택 config: `entry=close, --max-atr-pct 5, --hold-days 8`(보수) ~ `10`. 라이브 반영 시 review 필수.
+
+## 12. 라이브 반영 + ATR 추정기 정합 (2026-06-08)
+
+권장 config 를 라이브에 반영: `engine/config.py` `max_hold_days 5→8`, 신규 `max_atr_pct=5.0`.
+ATR% 게이트는 `engine/generator.py:_analyze_stock` 에 삽입(배치 스캔 `generate()` + 단일종목
+API `analyze_single_stock_by_code` 양쪽 공유 — 일관). fail-open(ATR 미산출 시 통과)은 entry
+필터 특성상 의도된 설계(통과=신호 증가, 누락 청산 아님).
+
+**code-reviewer HIGH 지적 — ATR 추정기 불일치 → 수정.** 라이브 게이트는 Wilder ATR
+(`engine.trailing_stop.compute_atr`, 트레일링 스탑 SoT)을 쓰는데, 백테 `--max-atr-pct` 필터는
+단순평균 ATR(`np.mean(tr[-14:])`)을 써서 검증값이 실거동을 그대로 재현하지 못할 위험.
+→ 백테 게이트를 라이브와 동일한 Wilder ATR 마지막값으로 정합(`scripts/backtest_jongga.py`,
+legacy static-stop 분기·기록용 단순평균 `atr` 은 보존). **재검증 결과 실데이터 영향 미미**:
+
+| 단계 | gate ATR | IS EV (n) | OOS-H1 EV (n) |
+|---|---|---|---|
+| 정합 전(단순평균) | simple mean | +1.995% (133) | +1.51% (70) |
+| **정합 후(Wilder, 라이브 일치)** | **Wilder** | **+1.984% (132)** | **+1.632% (77)** |
+
+→ 추정기 차이는 IS 1건/0.01%p, OOS-H1 은 오히려 +0.12%p 개선. 검증 결론(IS≈+2.0%,
+OOS-H1≥+1.5%) **불변**. 이제 라이브 게이트가 백테 검증값을 충실히 재현. **4주 페이퍼 확인 전
+실전·발신 금지는 그대로 유지**(OOS-H1 +1.63% = 신뢰 하한, +2% floor 는 강세 H2 견인).
