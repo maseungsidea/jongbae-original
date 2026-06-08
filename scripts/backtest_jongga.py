@@ -107,6 +107,9 @@ def parse_args():
                         "signal_tracker.py:475~ 와 정합). eval=진입 바도 평가(레거시 fall-through "
                         "재현용, d0 phantom hard_stop 포함 — 비교/회귀 측정 전용)")
     p.add_argument("--entry-timing", choices=["close", "next_open"], default="close")
+    p.add_argument("--max-atr-pct", type=float, default=None,
+                   help="진입가 대비 ATR%% 상한. 초과 종목은 진입 skip (고변동 노이즈 hard_stop 회피). "
+                        "예: 6.0 → ATR/entry>6%% 종목 제외")
     p.add_argument("--trailing", choices=["off", "atr10", "atr15", "atr20", "fixed3"],
                    default="atr15", help="손절 룰. fixed3=고정 -3%")
     p.add_argument("--target", choices=["off", "fixed5", "fixed8", "fixed10"],
@@ -259,6 +262,14 @@ def simulate_one(df_ticker: pd.DataFrame, ticker: str, args, scorer: Scorer,
 
         # exit rules
         atr = compute_atr(window, 14)
+
+        # ── 변동성 진입 필터 (Sprint 2 후보 2): 진입가 대비 ATR% 가 너무 높은
+        #    고변동 종목은 -8% hard_stop 에 노이즈로 걸려 EV 를 갉아먹는다.
+        #    ATR% 는 진입 시점에 알 수 있으므로 lookahead 아님. (근본 진입 메커니즘 변경)
+        if args.max_atr_pct is not None and entry > 0:
+            atr_pct = atr / entry * 100
+            if atr_pct > args.max_atr_pct:
+                continue
 
         if args.exit_engine == "faithful":
             # 라이브 청산 로직 재현 (engine.exit_simulator) — static 근사 대체
