@@ -472,6 +472,30 @@ def track_signals(
                 except Exception as _pe:
                     logger.warning(f"[signal_tracker] paper A진입 오류 ({ticker}): {_pe}")
 
+            # ── close 전략 진입일(d0) lookahead 방어 ──────────────────────
+            # 종가 진입은 신호일 종가에 체결된다. 신호일 바의 장중 저가는 진입
+            # *이전* 에 이미 지나간 가격이므로, 이를 hard_stop/trailing 평가에
+            # 쓰면 "보유하기도 전 가격으로 손절" 하는 lookahead 가 된다.
+            # next_open 이 진입 당일을 skip(:432) 하는 것과 동일하게, close 도
+            # 신호일 *이후* 바부터만 청산 평가한다. pykrx T+1 지연으로 ohlc[-1]
+            # 이 여전히 신호일 바인 경우에도 bar_date>signal_date 충족 시까지
+            # 평가를 보류하므로 안전하다. (Sprint 2: 충실 백테 skip-bar 와 정합)
+            if entry_timing == "close":
+                try:
+                    _bar_date = ohlc.index[-1].date()
+                    _sig_date = pd.to_datetime(str(row.get("signal_date", ""))).date()
+                except Exception as _de:
+                    # fail-closed: 날짜 파싱/타입 오류 시 청산 평가 보류 (진입 상태 유지).
+                    # 잘못된 바로 손절·발신하는 것보다 1회 평가를 미루는 것이 거래 안전.
+                    logger.warning(
+                        f"[signal_tracker] 날짜 비교 실패, 청산평가 보류(fail-closed): "
+                        f"{ticker} sig={row.get('signal_date')!r} ({_de})"
+                    )
+                    continue
+                if _bar_date <= _sig_date:
+                    # 아직 신호일(또는 그 이전) 바 — 진입 상태만 유지, 청산 평가 보류
+                    continue
+
             entry_price = _safe_float(row.get("entry_price"))
             prev_peak = _safe_float(row.get("peak_price")) or entry_price
             prev_stop = _safe_float(row.get("trailing_stop")) or initial_trailing_stop(

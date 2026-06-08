@@ -101,11 +101,11 @@ def parse_args():
     p.add_argument("--exit-engine", choices=["static", "faithful"], default="faithful",
                    help="faithful=라이브 청산 로직(trailing ratchet·Day-1 보호·hard_stop·분할익절) "
                         "재현. static=구 고정-stop 근사(--trailing/--target/--partial-exit 사용)")
-    p.add_argument("--close-entry-bar", choices=["eval", "skip"], default="eval",
+    p.add_argument("--close-entry-bar", choices=["eval", "skip"], default="skip",
                    help="(faithful·close 전용) 진입 바 청산 평가 여부. "
-                        "eval=라이브 fall-through 재현(진입일 hard_stop/trailing 가능, "
-                        "signal_tracker.py:439~485). skip=진입 다음날부터. "
-                        "라이브 진입일 평가는 14:55 진입 시 당일봉 미완성과 얽혀 타이밍 의존적 → 양쪽 측정 권장")
+                        "skip=신호일 이후 바부터 평가(라이브 기본, Sprint2 d0 lookahead 방어 후 "
+                        "signal_tracker.py:475~ 와 정합). eval=진입 바도 평가(레거시 fall-through "
+                        "재현용, d0 phantom hard_stop 포함 — 비교/회귀 측정 전용)")
     p.add_argument("--entry-timing", choices=["close", "next_open"], default="close")
     p.add_argument("--trailing", choices=["off", "atr10", "atr15", "atr20", "fixed3"],
                    default="atr15", help="손절 룰. fixed3=고정 -3%")
