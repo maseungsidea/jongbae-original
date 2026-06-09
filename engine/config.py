@@ -9,7 +9,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 # ─────────────────────────────────────────
@@ -56,10 +56,10 @@ class SignalConfig:
     min_trading_value  : 최소 거래대금 (50억 원, 스크리닝 1차 필터)
     max_change_pct     : 당일 급등 제외 상한선 (+15%)
     min_close_price    : 동전주 제외 최소 종가 (1,000원)
+    max_marcap         : 시총 상한(원). None=무제한. 메가캡 제외용 — 값은 백테 검증 후 설정
 
     ─ 제외 조건 ───────────────────────────────
     excluded_keywords  : 뉴스 제목에 포함 시 제외할 키워드
-    excluded_sectors   : 분석 제외 업종
 
     ─ 점수 가중치 (12점 만점) ──────────────────
     뉴스/재료 0~3점, 거래대금 0~3점, 차트패턴 0~2점,
@@ -82,15 +82,14 @@ class SignalConfig:
     min_trading_value: int = 5_000_000_000      # 50억 원
     max_change_pct: float = 15.0                # 당일 +15% 이상 제외
     min_close_price: int = 1_000                # 1,000원 미만 동전주 제외
+    max_marcap: Optional[int] = None            # 시총 상한(원). None=무제한. 메가캡 제외용 — 값은 백테 검증 후 설정
     top_n_per_market: int = 30                  # 시장별 상위 N개 종목 분석
 
     # ── 제외 조건 ──────────────────────────────
+    # ETF/ETN/리츠/스팩 제외는 data_fetcher._is_etf_like (이름패턴)로 수행 — Naver 소스가 섹터 미제공
     excluded_keywords: List[str] = field(default_factory=lambda: [
         "관리종목", "상장폐지", "감사의견", "자본잠식",
         "횡령", "배임", "소송", "부도", "파산",
-    ])
-    excluded_sectors: List[str] = field(default_factory=lambda: [
-        "스팩", "리츠", "ETF", "ETN",
     ])
 
     # ── 채점 세부 설정 ─────────────────────────

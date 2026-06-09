@@ -101,6 +101,7 @@ class KRXCollector:
                 min_trading_value=gc_b.min_trading_value,
                 max_change_pct=self.config.max_change_pct,
                 min_close_price=self.config.min_close_price,
+                max_marcap=self.config.max_marcap,
             )
         except Exception as e:
             logger.error(f"[KRXCollector] get_all_liquid_stocks({market}) 오류: {e}")
@@ -119,6 +120,7 @@ class KRXCollector:
                 min_trading_value=self.config.min_trading_value,
                 max_change_pct=self.config.max_change_pct,
                 min_close_price=self.config.min_close_price,
+                max_marcap=self.config.max_marcap,
             )
         except Exception as e:
             logger.error(f"[KRXCollector] naver get_top_gainers 오류: {e}")

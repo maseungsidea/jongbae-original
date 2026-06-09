@@ -137,6 +137,21 @@ def _fetch_page(market: str, page: int) -> List[StockData]:
     return _parse_page(html, market.upper())
 
 
+# ETF/ETN 브랜드 prefix. 운용사 상호(미래에셋/한국투자/파워 등)는 startswith 로
+# 보통주(미래에셋증권·한국투자증권·파워로직스)를 오탐 제외하므로 넣지 않는다 —
+# 실제 ETF 표시명은 브랜드(TIGER/ACE/KODEX 등)로 시작하고, ETN 은 키워드로 걸린다.
+_ETF_PREFIXES = ("KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO", "KOSEF",
+                  "SOL", "ACE", "PLUS", "TIMEFOLIO", "WOORI", "TREX", "SMART")
+_ETF_KEYWORDS = ("ETF", "ETN", "리츠", "스팩", "SPAC", "인버스", "레버리지")
+
+
+def _is_etf_like(name: str) -> bool:
+    """이름 패턴으로 ETF/ETN/리츠/스팩 여부 판별 (Naver 소스는 섹터 미제공)."""
+    nu = name.upper()
+    return (any(nu.startswith(p.upper()) for p in _ETF_PREFIXES) or
+            any(k.upper() in nu for k in _ETF_KEYWORDS))
+
+
 def naver_all_liquid_stocks(
     market: str = "KOSPI",
     *,
@@ -144,6 +159,7 @@ def naver_all_liquid_stocks(
     min_trading_value: int = 100_000_000_000,
     max_change_pct: float = 15.0,
     min_close_price: int = 1_000,
+    max_marcap: Optional[int] = None,
 ) -> List[StockData]:
     """시가총액 상위 페이지 전체 스캔 — 급등주 bias 없음.
 
@@ -152,6 +168,7 @@ def naver_all_liquid_stocks(
 
     Args:
         min_trading_value: 기본 1,000억 (Grade B TV 기준)
+        max_marcap: 시총 상한(원). None=무제한. 메가캡 제외용 — 값은 백테 검증 후 설정.
     """
     pool: List[StockData] = []
     for page in range(1, pages + 1):
@@ -181,23 +198,14 @@ def naver_all_liquid_stocks(
         logger.warning(f"[NaverFetcher] pykrx 교차검증 오류 ({_e}) → 빈 결과 반환")
         return []
 
-    # 섹터 정보 없이 이름 패턴으로 ETF/ETN/리츠/스팩 제외
-    _ETF_PREFIXES = ("KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO", "KOSEF",
-                     "SOL", "ACE", "PLUS", "TIMEFOLIO", "WOORI", "TREX",
-                     "SMART", "파워", "마이다스", "미래에셋", "한국투자")
-    _ETF_KEYWORDS = ("ETF", "ETN", "리츠", "스팩", "SPAC", "인버스", "레버리지")
-
-    def _is_etf_like(name: str) -> bool:
-        nu = name.upper()
-        return any(nu.startswith(p.upper()) for p in _ETF_PREFIXES) or \
-               any(k.upper() in nu for k in _ETF_KEYWORDS)
-
+    # 섹터 정보 없이 이름 패턴으로 ETF/ETN/리츠/스팩 제외 (모듈 레벨 _is_etf_like 사용)
     filtered = [
         s for s in pool
         if s.trading_value >= min_trading_value
         and s.change_pct <= max_change_pct
         and s.close >= min_close_price
         and not _is_etf_like(s.name)
+        and (max_marcap is None or s.marcap <= max_marcap)
     ]
     logger.info(
         f"[NaverFetcher] {market} 풀 {len(pool)} → 필터 통과 {len(filtered)} (전체 스캔, top_n 없음)"
@@ -213,6 +221,7 @@ def naver_top_gainers(
     min_trading_value: int = 5_000_000_000,
     max_change_pct: float = 15.0,
     min_close_price: int = 1_000,
+    max_marcap: Optional[int] = None,
 ) -> List[StockData]:
     """시가총액 상위 페이지에서 후보를 모은 뒤 등락률 내림차순 top_n.
 
@@ -220,9 +229,12 @@ def naver_top_gainers(
         * 거래대금 ≥ min_trading_value
         * 등락률 ≤ max_change_pct (당일 급등 제외)
         * 종가 ≥ min_close_price (동전주 제외)
+        * ETF/ETN/리츠/스팩 제외 (이름 패턴)
+        * 시총 ≤ max_marcap (None=무제한)
 
     Args:
         pages: 시가총액 상위 페이지 수 (기본 4 → 약 200 종목 풀)
+        max_marcap: 시총 상한(원). None=무제한. 메가캡 제외용 — 값은 백테 검증 후 설정.
     """
     pool: List[StockData] = []
     for page in range(1, pages + 1):
@@ -262,6 +274,8 @@ def naver_top_gainers(
         if s.trading_value >= min_trading_value
         and s.change_pct <= max_change_pct
         and s.close >= min_close_price
+        and not _is_etf_like(s.name)
+        and (max_marcap is None or s.marcap <= max_marcap)
     ]
     filtered.sort(key=lambda s: s.change_pct, reverse=True)
     logger.info(
