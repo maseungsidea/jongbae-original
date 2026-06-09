@@ -51,8 +51,19 @@ logger = logging.getLogger(__name__)
 
 PRICES_PATH = ROOT / "data" / "daily_prices.csv"
 SUPPLY_PATH = ROOT / "data" / "naver_supply.csv"
+MARCAP_PATH = ROOT / "data" / "korean_stocks_list.csv"
 OUT_DIR = ROOT / "data" / "backtests"
 FEE_RT = 0.0021  # 한국 round-trip 수수료 + 세금
+
+
+def load_marcap_lookup() -> dict[str, int]:
+    """korean_stocks_list.csv → {ticker: marcap} dict. BOM 처리 포함."""
+    if not MARCAP_PATH.exists():
+        logger.warning(f"[backtest] 시총 파일 없음: {MARCAP_PATH} → 시총 필터 무력화")
+        return {}
+    df = pd.read_csv(MARCAP_PATH, dtype={"ticker": str}, encoding="utf-8-sig")
+    df["ticker"] = df["ticker"].str.zfill(6)
+    return dict(zip(df["ticker"], df["marcap"].astype(int)))
 
 
 def load_supply_lookup() -> dict | None:
@@ -124,6 +135,8 @@ def parse_args():
     p.add_argument("--start", default=None, help="백테스트 시작일 (YYYY-MM-DD)")
     p.add_argument("--end", default=None, help="백테스트 종료일")
     p.add_argument("--label", default="run", help="결과 파일 라벨")
+    p.add_argument("--max-marcap", type=int, default=None,
+                   help="시총 상한(원). 초과 종목 제외. None=무제한 (예: 10000000000000 = 10조)")
     p.add_argument("--max-rows-debug", type=int, default=0,
                    help="디버그: ticker 수 제한 (0=전체)")
     p.add_argument("--supply", choices=["on", "off"], default="off",
@@ -435,6 +448,17 @@ def main():
     tickers = list(prices["ticker"].unique())
     if args.max_rows_debug > 0:
         tickers = tickers[:args.max_rows_debug]
+
+    if args.max_marcap is not None:
+        marcap_lookup = load_marcap_lookup()
+        before = len(tickers)
+        no_marcap = [t for t in tickers if t not in marcap_lookup]
+        dropped = [t for t in tickers if t in marcap_lookup and marcap_lookup[t] > args.max_marcap]
+        tickers = [t for t in tickers if t not in marcap_lookup or marcap_lookup[t] <= args.max_marcap]
+        logger.info(
+            f"[backtest:{args.label}] 시총 필터 max_marcap={args.max_marcap:,}원: "
+            f"before={before} dropped={len(dropped)} no_marcap(kept)={len(no_marcap)} after={len(tickers)}"
+        )
 
     logger.info(f"[backtest:{args.label}] tickers={len(tickers)} "
                 f"cutoff={args.cutoff} hold={args.hold_days}d "
