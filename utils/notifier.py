@@ -5,13 +5,20 @@
 환경변수:
     TELEGRAM_TOKEN     : Bot API 토큰 (BotFather 발급)
     TELEGRAM_CHAT_ID   : 수신 chat_id
-    JONGGA_NOTIFY      : "0" 이면 강제 비활성 (백테/테스트용). default=1.
+    JONGGA_NOTIFY        : "0" 이면 강제 비활성 (kill-switch, 백테/테스트용). default=1.
+    JONGGA_SEND_ACTIVATED: 발신 활성화 게이트. "1" 일 때만 실제 발신. **default=0 (fail-closed)**.
 
 설계 노트:
 - 동기(urllib) 호출 — Telegram API 는 단발성이라 async 가 불필요.
   scorer/order 모듈은 호출 후 결과를 기다리지 않으므로 latency 무관.
 - 자격증명이 없거나 비활성 시 graceful no-op (False 반환). 절대 예외를 던지지 않는다.
 - HTML parse_mode 사용 — 메시지에서 사용자 입력은 _escape_html() 로 통과.
+
+발신 활성화 정책 (BLOCKER — CLAUDE.md KPI 필요조건):
+- 건당 EV +2% 필요조건이 **faithful 백테 + 4주 페이퍼로 입증되기 전까지 발신 금지**.
+- 그래서 기본값을 fail-closed(OFF)로 둔다 — 배포 환경에 env 를 빠뜨려도 발신되지 않는다.
+- 페이퍼 4주로 +2% 확정 후에만 `JONGGA_SEND_ACTIVATED=1` 명시 설정으로 발신 개시.
+- 즉 한 env 토글이 아니라 "활성화 결정"을 코드 게이트로 강제 (대시보드 누락 = 발신 위험 제거).
 """
 from __future__ import annotations
 
@@ -30,8 +37,27 @@ APP_PREFIX = "[종가배팅앱(오리지널)]"
 
 
 def _enabled() -> bool:
-    """알림 허용 여부. JONGGA_NOTIFY=0 이면 강제 비활성."""
-    return os.getenv("JONGGA_NOTIFY", "1") != "0"
+    """알림 허용 여부 (fail-closed).
+
+    발신 = (kill-switch ON) AND (활성화 게이트 ON). 둘 다 충족해야 발신한다.
+      - JONGGA_NOTIFY=0          → 강제 비활성 (kill-switch). default=1.
+      - JONGGA_SEND_ACTIVATED!=1 → 비활성 (활성화 미입증). **default=0 (fail-closed)**.
+    기본 상태(둘 다 미설정)는 발신 OFF. EV +2% 필요조건이 페이퍼로 입증된 뒤에만
+    JONGGA_SEND_ACTIVATED=1 로 발신을 연다 (CLAUDE.md KPI BLOCKER).
+    """
+    if os.getenv("JONGGA_NOTIFY", "1") == "0":
+        return False
+    return os.getenv("JONGGA_SEND_ACTIVATED", "0") == "1"
+
+
+def is_send_activated() -> bool:
+    """외부 발신(텔레그램/허브 push 등) 활성화 여부 — fail-closed BLOCKER 게이트.
+
+    텔레그램뿐 아니라 trading-hub push(signal/snapshot 등 추천 콘텐츠) 발신 게이트로도
+    공유한다. heartbeat/error 같은 ops 모니터링은 이 게이트를 거치지 않는다 (호출부 책임).
+    EV +2% 필요조건이 페이퍼로 입증돼 JONGGA_SEND_ACTIVATED=1 일 때만 True.
+    """
+    return _enabled()
 
 
 def _credentials() -> Optional[tuple[str, str]]:

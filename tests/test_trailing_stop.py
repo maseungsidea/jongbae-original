@@ -61,13 +61,26 @@ class TestInitialTrailingStop:
 
 class TestUpdateTrailingStop:
     def test_peak_increases(self):
+        # min_hold_days(2) 경과 후: peak 상승 → trailing stop 추종 (기본 k=2.0)
+        state = TrailingState(
+            entry_price=100, peak_price=100, atr_value=2.0,
+            trailing_stop=97.0, days_held=2,
+        )
+        new = update_trailing_stop(state, today_high=105, today_close=104, today_atr=2.0)
+        assert new.peak_price == 105
+        assert new.trailing_stop == 101.0  # 105 - 2.0*2 = 101 (k=2.0, S1 완화)
+        assert new.days_held == 3
+
+    def test_day1_protection_holds_stop(self):
+        # days_held < min_hold_days(2): peak 가 올라도 trailing 갱신 보류 (Day-1 흔들기 방지).
+        # 9fb1fbf(Sprint 1)에서 추가된 보호 로직 — peak 만 추적하고 stop 은 진입 stop 유지.
         state = TrailingState(
             entry_price=100, peak_price=100, atr_value=2.0,
             trailing_stop=97.0, days_held=0,
         )
         new = update_trailing_stop(state, today_high=105, today_close=104, today_atr=2.0)
-        assert new.peak_price == 105
-        assert new.trailing_stop == 102.0  # 105 - 1.5*2 = 102
+        assert new.peak_price == 105       # peak 는 추적
+        assert new.trailing_stop == 97.0   # stop 은 보류 (Day-1 보호)
         assert new.days_held == 1
 
     def test_stop_monotonic_non_decreasing(self):
@@ -78,7 +91,7 @@ class TestUpdateTrailingStop:
         )
         new = update_trailing_stop(state, today_high=110, today_close=110, today_atr=2.0)
         assert new.peak_price == 120  # 기존 peak 유지
-        # candidate = 120 - 1.5*2 = 117, 기존도 117 → 그대로
+        # candidate = 120 - 2.0*2 = 116 < 117 → 단조성으로 기존 117 유지
         assert new.trailing_stop == 117.0
 
     def test_stop_rises_with_new_peak(self):
@@ -87,8 +100,8 @@ class TestUpdateTrailingStop:
             trailing_stop=107.0, days_held=2,
         )
         new = update_trailing_stop(state, today_high=120, today_close=119, today_atr=3.0)
-        # peak=120, candidate=120 - 1.5*3=115.5, max(107, 115.5)=115.5
-        assert new.trailing_stop == 115.5
+        # peak=120, candidate=120 - 2.0*3=114.0, max(107, 114)=114.0 (k=2.0)
+        assert new.trailing_stop == 114.0
         assert new.atr_value == 3.0
 
 

@@ -15,22 +15,26 @@ import signal_tracker
 
 @pytest.fixture(autouse=True)
 def cleanup_csv(tmp_path, monkeypatch):
-    """각 테스트마다 임시 signals_log.csv 사용."""
+    """각 테스트마다 임시 signals_log.csv + 임시 paper_account.json 사용."""
+    import paper_trading as _pt
     test_path = tmp_path / "signals_log.csv"
     monkeypatch.setattr(signal_tracker, "SIGNAL_LOG_PATH", test_path)
+    # paper_trading 이 실제 data/paper_account.json 에 쓰지 않도록 격리
+    fake_account_path = tmp_path / "paper_account.json"
+    monkeypatch.setattr(_pt, "ACCOUNT_PATH", fake_account_path)
     yield
     if test_path.exists():
         test_path.unlink()
 
 
-def make_signal_dict(ticker="005930", entry=70000, qty=100):
+def make_signal_dict(ticker="005930", entry=70000, qty=100, signal_date="2026-05-05"):
     return {
         "stock_code": ticker, "stock_name": "TEST", "market": "KOSPI", "sector": "",
         "grade": "A", "score": {"total": 9},
-        "signal_date": "2026-05-05", "entry_price": entry,
+        "signal_date": signal_date, "entry_price": entry,
         "stop_price": int(entry * 0.97), "target_price": int(entry * 1.05),
         "position_size": entry * qty, "quantity": qty,
-        "r_multiplier": 2.0, "created_at": "2026-05-05",
+        "r_multiplier": 2.0, "created_at": signal_date,
     }
 
 
@@ -109,7 +113,8 @@ class TestSaveSignal:
 
 class TestTrackSignals:
     def test_normal_run_updates_atr_columns(self):
-        signal_tracker.save_signal(make_signal_dict())
+        # signal_date aligned to OHLC window (2026-04-01) so post-signal bars exist
+        signal_tracker.save_signal(make_signal_dict(signal_date="2026-04-01"))
         prices = list(np.linspace(68000, 71500, 30))
         with patch("pykrx.stock.get_market_ohlcv_by_date", return_value=make_ohlc(prices)):
             signal_tracker.track_signals(
@@ -119,14 +124,16 @@ class TestTrackSignals:
 
         df = signal_tracker._load()
         row = df.iloc[0]
-        assert row.status == "pending"
+        # close 모드: pending → entered 전환 후 trailing 평가
+        assert row.status == "entered"
         assert not pd.isna(row.atr_value)
         assert not pd.isna(row.peak_price)
         assert not pd.isna(row.trailing_stop)
         assert row.days_held == 1.0
 
     def test_crash_triggers_trailing_stop(self):
-        signal_tracker.save_signal(make_signal_dict())
+        # signal_date aligned to OHLC window; hard_stop_floor_pct=0 isolates trailing mechanism
+        signal_tracker.save_signal(make_signal_dict(signal_date="2026-04-01"))
         # 29일간 70000 유지 후 마지막날 폭락 → low 가 stop 깨짐
         prices = [70000] * 29 + [42000]
         ohlc = make_ohlc(prices)
@@ -136,6 +143,7 @@ class TestTrackSignals:
             signal_tracker.track_signals(
                 atr_period=14, atr_multiplier=1.5, max_hold_days=10,
                 partial_exit_enabled=False,
+                hard_stop_floor_pct=0.0,  # disable hard_stop so crash exits via trailing
             )
 
         df = signal_tracker._load()
@@ -144,7 +152,8 @@ class TestTrackSignals:
         assert row.exit_reason == "trailing_stop"
 
     def test_partial_exit_then_stop_returns_weighted_avg(self):
-        signal_tracker.save_signal(make_signal_dict(entry=70000))
+        # signal_date aligned to OHLC window; hard_stop disabled to isolate partial/trailing path
+        signal_tracker.save_signal(make_signal_dict(entry=70000, signal_date="2026-04-01"))
         # +8% target = 75600 도달, 다음 날 폭락
         prices = [70000] * 29 + [76000]
         ohlc = make_ohlc(prices)
@@ -156,12 +165,13 @@ class TestTrackSignals:
                 partial_exit_enabled=True,
                 partial_exit_target_pct=8.0,
                 partial_exit_ratio=0.5,
+                hard_stop_floor_pct=0.0,
             )
 
         df = signal_tracker._load()
         row = df.iloc[0]
-        # partial 익절 후 status 는 여전히 pending
-        assert row.status == "pending"
+        # close 모드: pending → entered 전환; partial 익절 마킹 후 status = entered
+        assert row.status == "entered"
         assert int(row.partial_taken) == 1
         assert abs(float(row.partial_return) - 8.0) < 0.001
 
@@ -177,16 +187,17 @@ class TestTrackSignals:
                 partial_exit_enabled=True,
                 partial_exit_target_pct=8.0,
                 partial_exit_ratio=0.5,
+                hard_stop_floor_pct=0.0,
             )
 
         df = signal_tracker._load()
         row = df.iloc[0]
         assert row.status == "exited"
         assert row.exit_reason == "partial_stop"
-        # return_pct = 0.5*8 + 0.5*remainder, 이때 remainder 는 trailing_stop 청산가 기준
-        # remainder ≈ (stop - entry)/entry*100 인데 stop 은 ATR 기반이라 정확한 값보다는
-        # final return_pct 가 4% 이상 (~5~7%) 사이로 나오는지 확인
-        assert 4.0 <= float(row.return_pct) <= 8.0
+        # return_pct = 0.5*8 + 0.5*remainder; remainder is ATR-based trailing stop level.
+        # 측정 실측값 ≈ 2.52% (k=2.0 trailing). 좁은 밴드로 trailing 산식 회귀를 잡는다.
+        # (1.0~8.0 처럼 넓히면 remainder 가 크게 후퇴해도 통과 → 무의미한 assert 가 됨)
+        assert 2.0 <= float(row.return_pct) <= 3.0
 
     def test_no_open_signals_no_op(self):
         # 빈 CSV 에서 track_signals 호출 → 무사 리턴
@@ -264,13 +275,13 @@ class TestNextOpenEntry:
         assert float(row["return_pct"]) == 0.0
 
     def test_close_mode_unchanged(self):
-        # entry_timing=close 면 pending row 가 즉시 trailing 평가 (기존 동작)
-        signal_tracker.save_signal(make_signal_dict(entry=70000))
+        # close 모드: pending → entered 전환 후 trailing 평가 (signal_date aligned to OHLC)
+        signal_tracker.save_signal(make_signal_dict(entry=70000, signal_date="2026-04-01"))
         prices = list(np.linspace(70000, 71500, 30))
         with patch("pykrx.stock.get_market_ohlcv_by_date", return_value=make_ohlc(prices)):
             signal_tracker.track_signals(entry_timing="close")
         df = signal_tracker._load()
         row = df.iloc[0]
-        assert row["status"] == "pending"  # close 모드는 status 변경 없이 trailing
+        assert row["status"] == "entered"  # close 모드는 pending → entered 전환 후 trailing
         assert int(row["entry_price"]) == 70000  # entry_price 유지
         assert not pd.isna(row["peak_price"])

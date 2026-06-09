@@ -18,13 +18,16 @@ def env_enabled(monkeypatch):
     monkeypatch.setenv("TELEGRAM_TOKEN", "test_token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
     monkeypatch.delenv("JONGGA_NOTIFY", raising=False)
+    # 발신은 fail-closed 활성화 게이트가 ON 이어야 한다 (EV+2% 입증 후 운영 상태 모사).
+    monkeypatch.setenv("JONGGA_SEND_ACTIVATED", "1")
 
 
 @pytest.fixture
 def env_disabled(monkeypatch):
     monkeypatch.setenv("TELEGRAM_TOKEN", "test_token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
-    monkeypatch.setenv("JONGGA_NOTIFY", "0")
+    monkeypatch.setenv("JONGGA_SEND_ACTIVATED", "1")  # 활성화돼 있어도
+    monkeypatch.setenv("JONGGA_NOTIFY", "0")           # kill-switch 가 우선 차단
 
 
 @pytest.fixture
@@ -64,6 +67,20 @@ class TestEscapeHtml:
 
 class TestSendMessage:
     def test_disabled_via_env(self, env_disabled):
+        with patch("utils.notifier.urllib.request.urlopen") as m:
+            assert notifier.send_message("hi") is False
+            m.assert_not_called()
+
+    def test_fail_closed_when_not_activated(self, monkeypatch):
+        """BLOCKER 회귀잠금: 자격증명이 있어도 JONGGA_SEND_ACTIVATED 미설정이면 발신 금지.
+
+        EV +2% 필요조건 미입증 상태(=활성화 게이트 OFF, 기본값)에서는 절대 발신하지 않는다.
+        배포 환경에 env 를 빠뜨려도 fail-closed 로 침묵해야 한다 (CLAUDE.md KPI BLOCKER).
+        """
+        monkeypatch.setenv("TELEGRAM_TOKEN", "test_token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
+        monkeypatch.delenv("JONGGA_NOTIFY", raising=False)        # kill-switch 미설정(기본 on)
+        monkeypatch.delenv("JONGGA_SEND_ACTIVATED", raising=False)  # 활성화 미설정 → fail-closed
         with patch("utils.notifier.urllib.request.urlopen") as m:
             assert notifier.send_message("hi") is False
             m.assert_not_called()
@@ -140,6 +157,12 @@ class TestNotifyOrder:
 
 
 class TestNotifyTodayRecommendations:
+    @pytest.fixture(autouse=True)
+    def _trading_day(self, monkeypatch):
+        # 4차 gate(is_trading_day)는 발송 직전 휴장일 재확인용 — 해피패스 테스트에선
+        # 거래일로 고정해 실제 발송 로직을 검증한다. (함수 내부 import 이므로 원본 모듈 패치)
+        monkeypatch.setattr("engine.market_utils.is_trading_day", lambda *a, **k: True)
+
     def test_with_items(self, env_enabled, tmp_path):
         p = tmp_path / "today.json"
         p.write_text(json.dumps({

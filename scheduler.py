@@ -38,6 +38,25 @@ except Exception:
     _hub = None
 
 
+def _hub_push_content(push_fn, label: str = "snapshot") -> None:
+    """허브 콘텐츠(signal/snapshot) push 를 발신 활성화 게이트(BLOCKER) 한 곳에서 통제한다.
+
+    EV+2% 미입증 시 외부 발신 금지 — `notifier.is_send_activated()` 가 True 일 때만 push.
+    heartbeat/error 등 ops push 는 이 함수를 거치지 않는다 (게이트 면제, push_heartbeat 직접 호출).
+    게이트 로직을 한 곳에 모아 향후 push 추가 시 게이트 누락(BLOCKER leak)을 방지한다.
+    """
+    if not _hub:
+        return
+    from utils import notifier as _notifier
+    if _notifier.is_send_activated():
+        try:
+            push_fn(_hub)
+        except Exception:
+            pass
+    else:
+        logger.info(f"[Scheduler] 허브 {label} push 보류 (발신 미활성 — BLOCKER)")
+
+
 def _is_trading_day() -> bool:
     """오늘이 거래일인지 확인. 휴장이거나 불확실하면 False."""
     try:
@@ -134,21 +153,21 @@ def run_vcp_scan() -> dict:
             f"(A:{saved_a} B:{saved_b} legacy:{saved_legacy})"
         )
         logger.info(f"[Scheduler] {msg}")
-        if _hub:
+        # 추천 콘텐츠(signal/snapshot) 허브 push 는 발신 활성화 게이트 적용 (BLOCKER —
+        # EV+2% 미입증 시 외부 발신 금지). heartbeat/error 는 ops 용이라 게이트 면제.
+        def _push_scan(hub):
             for sig in result.signals:
                 try:
                     ticker = getattr(sig, "ticker", None) or str(sig)
                     score = float(getattr(sig, "score", 0) or 0)
-                    _hub.push_signal(ticker, score)
+                    hub.push_signal(ticker, score)
                 except Exception:
                     pass
-            try:
-                _hub.push_snapshot(
-                    date=date.today().isoformat(),
-                    signal_count=len(result.signals),
-                )
-            except Exception:
-                pass
+            hub.push_snapshot(
+                date=date.today().isoformat(),
+                signal_count=len(result.signals),
+            )
+        _hub_push_content(_push_scan, label="signal/snapshot")
         return {
             "success": True, "message": msg,
             "signal_count": len(result.signals),
@@ -285,18 +304,17 @@ def run_paper_portfolio_report() -> None:
         summary = pt.get_summary()
         sent = notifier.notify_paper_portfolio(summary)
         logger.info(f"[Scheduler] 페이퍼 리포트 발송: {sent}")
-        if _hub:
-            try:
-                today_str = date.today().isoformat()
-                today_trades = [t for t in summary.get("trades", []) if t.get("exit_date") == today_str]
-                daily_ret = round(sum(t.get("return_pct", 0) for t in today_trades) / len(today_trades), 2) if today_trades else 0.0
-                _hub.push_snapshot(
-                    date=today_str,
-                    signal_count=summary.get("trade_count", 0),
-                    daily_return_pct=daily_ret,
-                )
-            except Exception:
-                pass
+        # 허브 snapshot(잔고·수익률 콘텐츠) push 는 발신 활성화 게이트 적용 (BLOCKER).
+        def _push_paper(hub):
+            today_str = date.today().isoformat()
+            today_trades = [t for t in summary.get("trades", []) if t.get("exit_date") == today_str]
+            daily_ret = round(sum(t.get("return_pct", 0) for t in today_trades) / len(today_trades), 2) if today_trades else 0.0
+            hub.push_snapshot(
+                date=today_str,
+                signal_count=summary.get("trade_count", 0),
+                daily_return_pct=daily_ret,
+            )
+        _hub_push_content(_push_paper, label="snapshot")
     except Exception as e:
         logger.error(f"[Scheduler] 페이퍼 리포트 오류: {e}")
 

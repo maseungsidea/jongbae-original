@@ -109,9 +109,15 @@ class TestParsePage:
 
 class TestNaverTopGainers:
     def test_filters_low_close_and_high_change(self):
+        # 3차 신선도 gate(pykrx 교차검증, data_fetcher.py:239~)는 오늘 거래 데이터가 없으면
+        # fail-closed 로 빈 결과를 반환한다. 여기선 필터 로직만 검증하므로 교차검증을 통과시킨다.
+        _fresh = MagicMock()
+        _fresh.empty = False
         with patch(
             "engine.data_fetcher.urllib.request.urlopen",
             side_effect=lambda *a, **k: _fake_urlopen(SAMPLE_PAGE_HTML),
+        ), patch(
+            "pykrx.stock.get_market_ohlcv_by_date", return_value=_fresh,
         ):
             rs = data_fetcher.naver_top_gainers(
                 "KOSPI", top_n=10, pages=1,

@@ -61,8 +61,15 @@ COLUMNS = [
 ]
 
 
-def _load(path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
-    """CSV 파일을 로드. 신규 컬럼이 빠진 구버전 CSV 는 자동 backfill."""
+def _load(path: Optional[Path] = None) -> pd.DataFrame:
+    """CSV 파일을 로드. 신규 컬럼이 빠진 구버전 CSV 는 자동 backfill.
+
+    path=None 이면 호출 시점의 모듈 전역 SIGNAL_LOG_PATH 를 사용한다 (late-binding).
+    기본값을 정의-시점에 바인딩하면 테스트의 monkeypatch(SIGNAL_LOG_PATH 재지정)가
+    무시되어 실 운영 CSV 를 읽는 버그가 생기므로, 항상 호출 시점에 해석한다.
+    """
+    if path is None:
+        path = SIGNAL_LOG_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         return pd.DataFrame(columns=COLUMNS)
@@ -82,12 +89,14 @@ def _load(path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
     return df
 
 
-def _save(df: pd.DataFrame, path: Path = SIGNAL_LOG_PATH) -> None:
-    """DataFrame을 CSV로 저장합니다."""
+def _save(df: pd.DataFrame, path: Optional[Path] = None) -> None:
+    """DataFrame을 CSV로 저장합니다. path=None 이면 SIGNAL_LOG_PATH (late-binding)."""
+    if path is None:
+        path = SIGNAL_LOG_PATH
     df.to_csv(path, index=False, encoding="utf-8-sig")
 
 
-def save_signal(signal_dict: dict, log_path: Path = SIGNAL_LOG_PATH) -> bool:
+def save_signal(signal_dict: dict, log_path: Optional[Path] = None) -> bool:
     """
     새 시그널을 CSV에 저장합니다.
 
@@ -152,7 +161,7 @@ def update_exit(
     exit_price: float,
     exit_reason: str = "manual",
     exit_date: Optional[str] = None,
-    log_path: Path = SIGNAL_LOG_PATH,
+    log_path: Optional[Path] = None,
 ) -> bool:
     """
     특정 시그널의 청산 정보를 업데이트합니다.
@@ -196,7 +205,7 @@ def update_exit(
         return False
 
 
-def get_open_signals(log_path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
+def get_open_signals(log_path: Optional[Path] = None) -> pd.DataFrame:
     """미청산(pending 또는 entered) 시그널 목록을 반환합니다."""
     df = _load(log_path)
     if df.empty:
@@ -204,7 +213,7 @@ def get_open_signals(log_path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
     return df[df["status"].isin(["pending", "entered"])].copy()
 
 
-def get_today_signals(log_path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
+def get_today_signals(log_path: Optional[Path] = None) -> pd.DataFrame:
     """당일 생성된 시그널 목록을 반환합니다."""
     df = _load(log_path)
     if df.empty:
@@ -213,7 +222,7 @@ def get_today_signals(log_path: Path = SIGNAL_LOG_PATH) -> pd.DataFrame:
     return df[df["signal_date"] == today].copy()
 
 
-def persist_screener_result(result, log_path: Path = SIGNAL_LOG_PATH) -> int:
+def persist_screener_result(result, log_path: Optional[Path] = None) -> int:
     """ScreenerResult 의 모든 Signal 을 signals_log.csv 에 저장.
 
     중복(같은 ticker+signal_date)은 save_signal 이 알아서 skip.
@@ -270,7 +279,7 @@ def track_signals(
     rsi_overbought_threshold: float = 90.0,
     sanghan_exit_enabled: bool = True,
     sanghan_threshold_pct: float = 28.0,
-    log_path: Path = SIGNAL_LOG_PATH,
+    log_path: Optional[Path] = None,
 ) -> None:
     """
     미청산 시그널을 ATR 기반 트레일링 스톱으로 자동 추적.
